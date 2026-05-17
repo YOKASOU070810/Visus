@@ -1,0 +1,22 @@
+# Environment variables with secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Large model files (use Git LFS or manual upload)
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
