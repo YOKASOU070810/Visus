@@ -1,0 +1,34 @@
+# Environment variables with secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Android / Gradle
+.gradle/
+local.properties
+build/
+app/build/
+
+# JavaScript
+node_modules/
+
+# Logs
+*.log
+
+# Large model files (use Git LFS or manual upload)
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
