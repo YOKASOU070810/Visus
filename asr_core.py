@@ -1,6 +1,6 @@
 # asr_core.py
 # -*- coding: utf-8 -*-
-import os, json, asyncio
+import os, json, asyncio, time
 from typing import Any, Dict, List, Optional, Callable, Tuple
 
 ASR_DEBUG_RAW = os.getenv("ASR_DEBUG_RAW", "0") == "1"
@@ -112,6 +112,8 @@ class ASRCallback:
         self._last_partial_for_ui: str = ""   # 只用于 UI 展示
         self._last_final_text: str = ""       # 以句末 final 为准
         self._hot_interrupted: bool = False   # 本句是否因热词触发过复位（防抖）
+        self._last_partial_emit_ts: float = 0.0
+        self._partial_emit_interval: float = 0.10
 
         self._ui_partial = ui_broadcast_partial
         self._ui_final   = ui_broadcast_final
@@ -182,18 +184,12 @@ class ASRCallback:
                 pass
             return
 
-        # ---------- ② partial：仅用于 UI 展示 ----------
-        self._last_partial_for_ui = text
-        try:
-            print(f"[ASR PARTIAL] len={len(text)} text='{_shorten(text)}'", flush=True)
-            self._post(self._ui_partial(self._last_partial_for_ui))
-        except Exception:
-            pass
-
         # ---------- ③ final：仅 final 驱动 LLM（若未在播报） ----------
         if is_end is True:
             final_text = text
             try:
+                final_ts = time.perf_counter()
+                print(f"[PERF] asr_final_received_at={final_ts:.6f}", flush=True)
                 print(f"[ASR FINAL]  len={len(final_text)} text='{final_text}'", flush=True)
                 self._post(self._ui_final(final_text))
             except Exception:
@@ -202,6 +198,10 @@ class ASRCallback:
             if (not self._is_playing()) and final_text:
                 async def _run_final():
                     async with self._interrupt_lock:
+                        try:
+                            print(f"[PERF] asr_final_to_ai_start={(time.perf_counter() - final_ts) * 1000:.1f} ms", flush=True)
+                        except Exception:
+                            pass
                         print(f"[LLM INPUT TEXT] {final_text}", flush=True)
                         await self._start_ai(final_text)
                 try:
@@ -213,3 +213,21 @@ class ASRCallback:
             self._last_partial_for_ui = ""
             self._last_final_text = ""
             self._hot_interrupted = False
+            return
+
+        # ---------- ② partial：仅用于 UI 展示，低频刷新 ----------
+        now = time.perf_counter()
+        changed = text != self._last_partial_for_ui
+        meaningful = changed and (
+            len(text) >= len(self._last_partial_for_ui) + 2
+            or not self._last_partial_for_ui
+            or not text.startswith(self._last_partial_for_ui)
+        )
+        if meaningful and (now - self._last_partial_emit_ts) >= self._partial_emit_interval:
+            self._last_partial_for_ui = text
+            self._last_partial_emit_ts = now
+            try:
+                print(f"[ASR PARTIAL] len={len(text)} text='{_shorten(text)}'", flush=True)
+                self._post(self._ui_partial(self._last_partial_for_ui))
+            except Exception:
+                pass

@@ -79,7 +79,6 @@ class CameraManager(
     private fun imageProxyToJpeg(imageProxy: ImageProxy): ByteArray? {
         return try {
             val nv21 = yuv420888ToNv21(imageProxy)
-
             val yuvImage = YuvImage(
                 nv21,
                 ImageFormat.NV21,
@@ -91,15 +90,53 @@ class CameraManager(
             val out = ByteArrayOutputStream()
             yuvImage.compressToJpeg(
                 Rect(0, 0, imageProxy.width, imageProxy.height),
-                70,
+                JPEG_QUALITY,
                 out
             )
 
-            out.toByteArray()
+            val jpegData = out.toByteArray()
+            val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+                ?: return jpegData
+            val normalized = normalizeCameraBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
+            val normalizedOut = ByteArrayOutputStream()
+            normalized.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, normalizedOut)
+            if (normalized !== bitmap) {
+                bitmap.recycle()
+            }
+            normalized.recycle()
+            normalizedOut.toByteArray()
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
+    }
+
+    private fun normalizeCameraBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+        val matrix = Matrix()
+        if (rotationDegrees != 0) {
+            matrix.postRotate(rotationDegrees.toFloat())
+        }
+
+        val rotated = if (rotationDegrees != 0) {
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        } else {
+            bitmap
+        }
+
+        val maxSide = maxOf(TARGET_WIDTH, TARGET_HEIGHT)
+        val longSide = maxOf(rotated.width, rotated.height)
+        if (longSide <= maxSide) {
+            return rotated
+        }
+
+        val scale = maxSide.toFloat() / longSide.toFloat()
+        val targetWidth = (rotated.width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (rotated.height * scale).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(rotated, targetWidth, targetHeight, true)
+        if (scaled !== rotated && rotated !== bitmap) {
+            rotated.recycle()
+        }
+        return scaled
     }
 
     private fun yuv420888ToNv21(imageProxy: ImageProxy): ByteArray {

@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 from typing import List, Tuple
 import os
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except (ModuleNotFoundError, ImportError):
+    OpenAI = None
 
 # —— 本地优先映射（可随时扩充/改名）——
 LOCAL_CN2EN = {
@@ -17,7 +20,9 @@ LOCAL_CN2EN = {
     "雪碧": "sprite",
 }
 
-def _make_client() -> OpenAI:
+def _make_client():
+    if OpenAI is None:
+        raise RuntimeError("openai package is not installed")
     # 复用你百炼兼容端点；支持从环境变量读取
     base_url = os.getenv("DASHSCOPE_COMPAT_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     api_key  = "sk-a9440db694924559ae4ebdc2023d2b9a"

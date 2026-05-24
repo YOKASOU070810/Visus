@@ -55,7 +55,9 @@ class AudioCaptureManager(
                     val bytesRead = audioRecord?.read(buffer, 0, BYTES_PER_CHUNK) ?: -1
                     if (bytesRead > 0) {
                         chunkCount += 1
-                        Log.d(TAG, "Audio chunk #$chunkCount read: $bytesRead bytes")
+                        if (chunkCount <= 5 || chunkCount % 100L == 0L) {
+                            Log.d(TAG, "Audio chunk #$chunkCount read: $bytesRead bytes")
+                        }
                         val chunk = buffer.copyOf(bytesRead)
                         val outgoingChunk = if (BYPASS_NOISE_GATE) chunk else applyLightNoiseGate(chunk)
                         onAudioChunk(outgoingChunk)
@@ -98,6 +100,8 @@ class AudioPlaybackManager {
         const val SAMPLE_RATE = 8000
         private const val CHANNEL = AudioFormat.CHANNEL_OUT_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+        private const val PREBUFFER_BYTES = SAMPLE_RATE * 2 / 4 // 250ms of PCM16 mono
+        private const val REBUFFER_GAP_MS = 350L
     }
 
     private var audioTrack: AudioTrack? = null
@@ -108,7 +112,7 @@ class AudioPlaybackManager {
 
     private val bufferSize = AudioTrack.getMinBufferSize(
         SAMPLE_RATE, CHANNEL, ENCODING
-    ).coerceAtLeast(4096)
+    ).coerceAtLeast(8192)
 
     /** Stream AI voice from server's /stream.wav endpoint */
     fun playStreamFromUrl(
@@ -140,10 +144,6 @@ class AudioPlaybackManager {
                                 return@use
                             }
 
-                            initAudioTrack()
-                            audioTrack?.play()
-                            onStart()
-
                             val body = response.body ?: return@use
                             val input = body.byteStream()
                             val buf = ByteArray(4096)
@@ -158,11 +158,70 @@ class AudioPlaybackManager {
 
                             Log.i(TAG, "Stream playback started, WAV header skipped")
 
-                            // Play PCM data
+                            val prebuffer = java.io.ByteArrayOutputStream(PREBUFFER_BYTES)
+                            while (
+                                prebuffer.size() < PREBUFFER_BYTES &&
+                                isActive &&
+                                keepStreamAlive
+                            ) {
+                                val need = minOf(PREBUFFER_BYTES - prebuffer.size(), buf.size)
+                                val n = input.read(buf, 0, need)
+                                if (n < 0) break
+                                if (n > 0) prebuffer.write(buf, 0, n)
+                            }
+
+                            initAudioTrack()
+                            audioTrack?.play()
+                            onStart()
+
+                            val initialAudio = prebuffer.toByteArray()
+                            if (initialAudio.isNotEmpty()) {
+                                audioTrack?.write(initialAudio, 0, initialAudio.size)
+                            }
+
+                            var lastReadAt = System.currentTimeMillis()
                             while (isActive && keepStreamAlive) {
                                 val n = input.read(buf)
                                 if (n < 0) break
-                                audioTrack?.write(buf, 0, n)
+                                if (n > 0) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastReadAt > REBUFFER_GAP_MS) {
+                                        try {
+                                            audioTrack?.pause()
+                                            audioTrack?.flush()
+                                        } catch (_: Exception) {
+                                        }
+                                        val rebuffer = java.io.ByteArrayOutputStream(PREBUFFER_BYTES)
+                                        rebuffer.write(buf, 0, n)
+                                        while (
+                                            rebuffer.size() < PREBUFFER_BYTES &&
+                                            isActive &&
+                                            keepStreamAlive
+                                        ) {
+                                            val need = minOf(PREBUFFER_BYTES - rebuffer.size(), buf.size)
+                                            val rn = input.read(buf, 0, need)
+                                            if (rn < 0) break
+                                            if (rn > 0) rebuffer.write(buf, 0, rn)
+                                        }
+                                        audioTrack?.play()
+                                        val reb = rebuffer.toByteArray()
+                                        var rebWritten = 0
+                                        while (rebWritten < reb.size && isActive && keepStreamAlive) {
+                                            val w = audioTrack?.write(reb, rebWritten, reb.size - rebWritten) ?: 0
+                                            if (w <= 0) break
+                                            rebWritten += w
+                                        }
+                                        lastReadAt = System.currentTimeMillis()
+                                        continue
+                                    }
+                                    lastReadAt = now
+                                    var written = 0
+                                    while (written < n && isActive && keepStreamAlive) {
+                                        val w = audioTrack?.write(buf, written, n - written) ?: 0
+                                        if (w <= 0) break
+                                        written += w
+                                    }
+                                }
                             }
 
                             Log.i(TAG, "Stream playback ended")

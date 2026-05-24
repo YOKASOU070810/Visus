@@ -11,6 +11,7 @@
   const $fps       = document.getElementById('fps');
   const canvas     = document.getElementById('canvas');
   const ctx        = canvas.getContext('2d');
+  const CAMERA_ROTATION_DEG = 0;
 
   // === 获取/创建聊天容器（关键补丁） ===
   let chatContainer = document.getElementById('chatContainer');
@@ -134,9 +135,40 @@
         border-color:#2a6df4 !important;
         border-top-right-radius:6px !important;
       }
+      #visusStatusTag{
+        display:inline-flex !important;
+        align-items:center !important;
+        margin-left:8px !important;
+        padding:2px 8px !important;
+        border-radius:999px !important;
+        border:1px solid #2a3446 !important;
+        background:#111a2e !important;
+        color:#c9d1d9 !important;
+        font-size:12px !important;
+        line-height:18px !important;
+        vertical-align:middle !important;
+      }
     `;
     document.head.appendChild(s);
   })();
+
+  const statusText = {
+    listening: '听我说',
+    thinking: '思考中',
+    speaking: '正在播报',
+    idle: '等待音频'
+  };
+  let $statusTag = document.getElementById('visusStatusTag');
+  if (!$statusTag) {
+    $statusTag = document.createElement('span');
+    $statusTag.id = 'visusStatusTag';
+    $statusTag.textContent = statusText.idle;
+    ($asrStatus?.parentElement || document.body).appendChild($statusTag);
+  }
+
+  function setStatusStage(stage) {
+    $statusTag.textContent = statusText[stage] || stage || statusText.idle;
+  }
 
   // 聊天消息管理
   let lastTimestamp = 0;
@@ -219,7 +251,7 @@
   function fitCanvas(){
     const rect = canvas.getBoundingClientRect();
     const w = Math.max(320, Math.floor(rect.width));
-    const h = Math.max(240, Math.floor(rect.width * 3/4)); // 4:3
+    const h = Math.max(426, Math.floor(rect.width * 4/3)); // portrait after 90deg rotation
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w; canvas.height = h;
     }
@@ -227,19 +259,33 @@
   window.addEventListener('resize', fitCanvas); fitCanvas();
 
   let wsCam, wsUI, frames = 0, fpsTimer = 0;
+  let latestFrameBuffer = null;
+  let decodingFrame = false;
+  let partialRaf = 0;
+  let pendingPartialText = '';
 
-  function drawBlob(buf){
-    const blob = new Blob([buf], {type:'image/jpeg'});
-    if ('createImageBitmap' in window){
-      createImageBitmap(blob).then(bmp=>{
-        fitCanvas();
-        ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-      }).catch(()=>{});
-    }else{
-      const img = new Image();
-      img.onload = ()=>{ fitCanvas(); ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(img.src); };
-      img.src = URL.createObjectURL(blob);
+  function drawBitmapToCanvas(source) {
+    fitCanvas();
+    const cw = canvas.width;
+    const ch = canvas.height;
+    ctx.save();
+    ctx.clearRect(0, 0, cw, ch);
+    if (CAMERA_ROTATION_DEG % 360 === 90) {
+      ctx.translate(cw, 0);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(source, 0, 0, ch, cw);
+    } else if (CAMERA_ROTATION_DEG % 360 === 270) {
+      ctx.translate(0, ch);
+      ctx.rotate(-Math.PI / 2);
+      ctx.drawImage(source, 0, 0, ch, cw);
+    } else if (CAMERA_ROTATION_DEG % 360 === 180) {
+      ctx.translate(cw, ch);
+      ctx.rotate(Math.PI);
+      ctx.drawImage(source, 0, 0, cw, ch);
+    } else {
+      ctx.drawImage(source, 0, 0, cw, ch);
     }
+    ctx.restore();
     frames++;
     const now = performance.now();
     if (!fpsTimer) fpsTimer = now;
@@ -248,6 +294,47 @@
       frames = 0; fpsTimer = now;
     }
   }
+
+  function schedulePartial(text) {
+    pendingPartialText = text;
+    if (partialRaf) return;
+    partialRaf = requestAnimationFrame(() => {
+      partialRaf = 0;
+      $partial.textContent = pendingPartialText;
+    });
+  }
+
+  function drawBlob(buf){
+    latestFrameBuffer = buf;
+  }
+
+  function cameraRenderLoop(){
+    requestAnimationFrame(cameraRenderLoop);
+    if (!latestFrameBuffer || decodingFrame) return;
+    const buf = latestFrameBuffer;
+    latestFrameBuffer = null;
+    decodingFrame = true;
+    const blob = new Blob([buf], {type:'image/jpeg'});
+    if ('createImageBitmap' in window){
+      createImageBitmap(blob).then(bmp=>{
+        drawBitmapToCanvas(bmp);
+        if (typeof bmp.close === 'function') bmp.close();
+      }).catch(()=>{}).finally(()=>{ decodingFrame = false; });
+    }else{
+      const img = new Image();
+      img.onload = ()=>{
+        drawBitmapToCanvas(img);
+        URL.revokeObjectURL(img.src);
+        decodingFrame = false;
+      };
+      img.onerror = ()=>{
+        URL.revokeObjectURL(img.src);
+        decodingFrame = false;
+      };
+      img.src = URL.createObjectURL(blob);
+    }
+  }
+  cameraRenderLoop();
 
   function connectCamera(){
     try{ if (wsCam) wsCam.close(); }catch(e){}
@@ -271,10 +358,17 @@
     wsUI.onerror = ()=> setBadge($asrStatus, false, 'ASR: error');
     wsUI.onmessage = (ev)=>{
       const s = ev.data || '';
+      if (s.startsWith('{')) {
+        try {
+          const data = JSON.parse(s);
+          if (data.type === 'status') setStatusStage(data.stage);
+        } catch(e) {}
+        return;
+      }
       if (s.startsWith('INIT:')){
         try{
           const data = JSON.parse(s.slice(5));
-          $partial.textContent = data.partial || '（等待音频…）';
+          schedulePartial(data.partial || '（等待音频…）');
           
           // 初始化时加载历史消息（识别 [AI] 与 [导航]）
           if (data.finals && data.finals.length > 0) {
@@ -293,7 +387,7 @@
         return;
       }
       if (s.startsWith('PARTIAL:')){ 
-        $partial.textContent = s.slice(8); 
+        schedulePartial(s.slice(8)); 
         return; 
       }
       if (s.startsWith('FINAL:')){
@@ -306,7 +400,7 @@
         } else {
           addMessage(text, true);  // 其它仍按右侧
         }
-        $partial.textContent = '（等待音频…）';
+        schedulePartial('（等待音频…）');
         return;
       }
     }

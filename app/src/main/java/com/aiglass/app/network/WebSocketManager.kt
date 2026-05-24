@@ -111,7 +111,9 @@ class WebSocketManager(
         if (_connectionState.value.audio) {
             audioChunkSendCount += 1
             val sent = ws.send(pcmBytes.toByteString())
-            Log.d(TAG, "Audio chunk #$audioChunkSendCount send: ${pcmBytes.size} bytes, success=$sent")
+            if (audioChunkSendCount <= 5L || audioChunkSendCount % 100L == 0L) {
+                Log.d(TAG, "Audio chunk #$audioChunkSendCount send: ${pcmBytes.size} bytes, success=$sent")
+            }
         } else {
             Log.w(TAG, "Audio WS disconnected, dropping ${pcmBytes.size} bytes")
         }
@@ -263,17 +265,18 @@ class WebSocketManager(
         try {
             if (text.trim().startsWith("{")) {
                 val json = JSONObject(text)
-                if (json.optString("type") == "ai_reply") {
-                    val msg = json.optString("text").trim()
-                    if (msg.isNotEmpty()) {
-                        _aiResponse.value = msg
-                        onAiMessage?.invoke(msg)
-                        if (json.optBoolean("tts_fallback", false)) {
+                when (json.optString("type")) {
+                    "ai_reply" -> {
+                        val msg = json.optString("text").trim()
+                        if (msg.isNotEmpty() && json.optBoolean("tts_fallback", false)) {
                             _aiSpeechText.value = null
                             _aiSpeechText.value = msg
                         }
+                        return
                     }
-                    return
+                    "status" -> {
+                        return
+                    }
                 }
             }
             when {

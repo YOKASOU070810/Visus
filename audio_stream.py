@@ -1,6 +1,7 @@
 # audio_stream.py
 # -*- coding: utf-8 -*-
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Optional, Set, List, Tuple, Any, Dict
 from fastapi import Request
@@ -11,9 +12,17 @@ STREAM_SR = 8000  # 改为8kHz，ESP32支持
 STREAM_CH = 1
 STREAM_SW = 2
 BYTES_PER_20MS_16K = STREAM_SR * STREAM_SW * 20 // 1000  # 320B (8kHz)
+STREAM_SEND_CHUNK_BYTES = BYTES_PER_20MS_16K * 5         # 100ms chunks reduce HTTP jitter
 
 # ===== AI 播放任务总闸 =====
 current_ai_task: Optional[asyncio.Task] = None
+_reply_perf_start: Optional[float] = None
+_first_stream_write_logged = False
+
+def mark_audio_reply_start(start_ts: Optional[float] = None):
+    global _reply_perf_start, _first_stream_write_logged
+    _reply_perf_start = start_ts if start_ts is not None else time.perf_counter()
+    _first_stream_write_logged = False
 
 async def cancel_current_ai():
     """取消当前大模型语音任务，并等待其退出。"""
@@ -41,7 +50,7 @@ class StreamClient:
     last_active: float = 0.0
 
 stream_clients: "Set[StreamClient]" = set()
-STREAM_QUEUE_MAX = 96  # 小缓冲，避免积压
+STREAM_QUEUE_MAX = 512  # allow smooth client-side buffering; reset clears stale audio
 
 def _wav_header_unknown_size(sr=16000, ch=1, sw=2) -> bytes:
     import struct
@@ -106,7 +115,13 @@ async def soft_reset_audio(reason: str = ""):
         print(f"[SOFT-RESET] {reason}")
 
 async def broadcast_pcm16_realtime(pcm16: bytes):
-    """以 20ms 节拍把 pcm16 发送给所有仍存活的连接；队列满丢尾，保持实时。"""
+    """Queue PCM for connected /stream.wav clients.
+
+    Playback pacing belongs to the client AudioTrack/browser decoder. Sleeping
+    here on every 20ms frame adds event-loop and network jitter that is audible
+    as stutter on Android.
+    """
+    global _first_stream_write_logged
     # 【新增】录制音频（在分发之前整体录制，避免分片）
     try:
         import sync_recorder
@@ -114,11 +129,9 @@ async def broadcast_pcm16_realtime(pcm16: bytes):
     except Exception:
         pass  # 静默失败，不影响播放
     
-    loop = asyncio.get_event_loop()
-    next_tick = loop.time()
     off = 0
     while off < len(pcm16):
-        take = min(BYTES_PER_20MS_16K, len(pcm16) - off)
+        take = min(STREAM_SEND_CHUNK_BYTES, len(pcm16) - off)
         piece = pcm16[off:off + take]
 
         import time as _time2
@@ -133,29 +146,29 @@ async def broadcast_pcm16_realtime(pcm16: bytes):
                     try: sc.q.get_nowait()
                     except Exception: pass
                 sc.q.put_nowait(piece)
+                if not _first_stream_write_logged and piece:
+                    _first_stream_write_logged = True
+                    if _reply_perf_start is not None:
+                        print(f"[PERF] ai_start_to_first_stream_write={(time.perf_counter() - _reply_perf_start) * 1000:.1f} ms", flush=True)
             except Exception:
                 dead.append(sc)
         for sc in dead:
             try: stream_clients.discard(sc)
             except Exception: pass
 
-        next_tick += 0.020
-        now = loop.time()
-        if now < next_tick:
-            await asyncio.sleep(next_tick - now)
-        else:
-            next_tick = now
         off += take
 
 # ===== FastAPI 路由注册器 =====
 def register_stream_route(app):
     @app.get("/stream.wav")
     async def stream_wav(_: Request):
-        # 踢掉超过 10s 无活动的旧连接，而非全部清空
+        # Keep idle stream clients around long enough for the next reply.
+        # Android keeps /stream.wav open while waiting; a short timeout can
+        # close the stream just before a new answer starts and lose audio.
         import time as _time
         now = _time.time()
         for sc in list(stream_clients):
-            if getattr(sc, 'last_active', 0) < now - 10:
+            if getattr(sc, 'last_active', 0) < now - 120:
                 try: sc.abort_event.set()
                 except Exception: pass
                 stream_clients.discard(sc)

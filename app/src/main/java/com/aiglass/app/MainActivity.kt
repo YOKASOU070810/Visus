@@ -241,6 +241,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun addChatMessage(text: String, isUser: Boolean) {
+        val cleanText = text.trim()
+        if (cleanText.startsWith("{") && cleanText.contains("\"type\"")) return
         chatMessages = (chatMessages + ChatMessage(text = text, isUser = isUser))
             .takeLast(100)
     }

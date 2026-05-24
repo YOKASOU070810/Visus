@@ -97,6 +97,7 @@ ASR_PENDING_MAX_CHUNKS = 100      # 2 seconds of 20ms chunks
 from audio_stream import (
     register_stream_route,         # 挂 /stream.wav
     broadcast_pcm16_realtime,      # 实时向连接分发 16k PCM
+    mark_audio_reply_start,
     hard_reset_audio,              # 音频+AI 播放总闸
     soft_reset_audio,              # 普通AI回复前清理旧音频但保留客户端
     BYTES_PER_20MS_16K,
@@ -130,6 +131,11 @@ current_partial: str = ""
 recent_finals: List[str] = []
 RECENT_MAX = 50
 last_frames: Deque[Tuple[float, bytes]] = deque(maxlen=10)
+VISUAL_TRIGGER_WORDS = (
+    "帮我看", "看看", "识别", "这是什么", "前面有什么", "周围有什么",
+    "拍照", "看一下", "能不能吃", "读一下",
+)
+CAMERA_DISPLAY_ROTATE_DEG = int(os.getenv("CAMERA_DISPLAY_ROTATE_DEG", "90"))
 
 camera_viewers: Set[WebSocket] = set()
 esp32_camera_ws: Optional[WebSocket] = None
@@ -368,6 +374,39 @@ async def ui_broadcast_ai_reply(text: str, tts_fallback: bool = False):
     }
     await ui_broadcast_raw(json.dumps(payload, ensure_ascii=False))
 
+async def ui_broadcast_status(stage: str):
+    payload = {"type": "status", "stage": stage}
+    await ui_broadcast_raw(json.dumps(payload, ensure_ascii=False))
+
+def should_attach_image(user_text: str) -> bool:
+    text = (user_text or "").strip()
+    return bool(text) and any(word in text for word in VISUAL_TRIGGER_WORDS)
+
+def _rotate_bgr_for_display(bgr):
+    if bgr is None:
+        return None
+    deg = CAMERA_DISPLAY_ROTATE_DEG % 360
+    if deg == 90:
+        return cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+    if deg == 180:
+        return cv2.rotate(bgr, cv2.ROTATE_180)
+    if deg == 270:
+        return cv2.rotate(bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return bgr
+
+def compress_camera_jpeg(jpeg_bytes: bytes, max_side: int = 640, quality: int = 70) -> bytes:
+    arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if bgr is None or bgr.size == 0:
+        return jpeg_bytes
+    bgr = _rotate_bgr_for_display(bgr)
+    h, w = bgr.shape[:2]
+    scale = min(1.0, float(max_side) / float(max(h, w)))
+    if scale < 1.0:
+        bgr = cv2.resize(bgr, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    ok, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    return enc.tobytes() if ok else jpeg_bytes
+
 async def full_system_reset(reason: str = ""):
     """
     回到刚启动后的状态：
@@ -387,6 +426,7 @@ async def full_system_reset(reason: str = ""):
     global current_partial, recent_finals
     current_partial = ""
     recent_finals = []
+    await ui_broadcast_status("idle")
 
     # 4) 相机帧
     try:
@@ -690,32 +730,88 @@ async def start_ai_with_text(user_text: str):
         txt_buf: List[str] = []
         rate_state = None
         audio_sent = False
+        ai_start_ts = time.perf_counter()
+        mark_audio_reply_start(ai_start_ts)
+        print(f"[PERF] ai_start_at={ai_start_ts:.6f}", flush=True)
+        first_text_logged = False
+        first_audio_logged = False
+        first_speaking_status = False
+        pcm_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=96)
+
+        async def playback_worker():
+            initial_buffer = bytearray()
+            initial_target_bytes = 8000 * 2 * 500 // 1000  # 500ms @ 8kHz PCM16 mono
+            initial_started = False
+            while True:
+                pcm = await pcm_queue.get()
+                if pcm is None:
+                    if initial_buffer:
+                        await broadcast_pcm16_realtime(bytes(initial_buffer))
+                        initial_buffer.clear()
+                    pcm_queue.task_done()
+                    break
+                try:
+                    if not initial_started:
+                        initial_buffer.extend(pcm)
+                        if len(initial_buffer) < initial_target_bytes:
+                            continue
+                        initial_started = True
+                        await broadcast_pcm16_realtime(bytes(initial_buffer))
+                        initial_buffer.clear()
+                    else:
+                        await broadcast_pcm16_realtime(pcm)
+                finally:
+                    pcm_queue.task_done()
+
+        async def enqueue_pcm(pcm: bytes):
+            if not pcm:
+                return
+            if pcm_queue.full():
+                try:
+                    pcm_queue.get_nowait()
+                    pcm_queue.task_done()
+                    print("[AI AUDIO] playback queue full, dropped oldest chunk", flush=True)
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                pcm_queue.put_nowait(pcm)
+            except asyncio.QueueFull:
+                pass
+
+        playback_task = asyncio.create_task(playback_worker())
 
         # 组装（图像+文本）
         content_list = [{
             "type": "text",
             "text": (
-                "请把下面这句话当作用户正在和你说话来回应。"
-                "你可以自然聊天，也可以根据画面提供出行帮助。"
-                "先回应用户，再给出简短有用的信息。"
+                "你是 Visus 语音助手。普通对话请用 1-2 句中文简短回答，适合语音播报。"
             )
         }]
-        if last_frames:
+        attach_image = should_attach_image(user_text)
+        if attach_image and last_frames:
             try:
                 _, jpeg_bytes = last_frames[-1]
-                img_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+                small_jpeg = compress_camera_jpeg(jpeg_bytes)
+                img_b64 = base64.b64encode(small_jpeg).decode("ascii")
                 content_list.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
                 })
+                print(f"[AI] attach_image=true jpeg={len(jpeg_bytes)} compressed={len(small_jpeg)}", flush=True)
             except Exception:
                 pass
+        else:
+            print("[AI] attach_image=false", flush=True)
         content_list.append({"type": "text", "text": user_text})
 
         try:
+            await ui_broadcast_status("thinking")
             async for piece in stream_chat(content_list, voice="Cherry", audio_format="wav", include_audio=True):
                 # 文本增量（仅 UI）
                 if piece.text_delta:
+                    if not first_text_logged:
+                        first_text_logged = True
+                        print(f"[PERF] ai_start_to_first_text={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
                     txt_buf.append(piece.text_delta)
                     try:
                         await ui_broadcast_partial("[AI] " + "".join(txt_buf))
@@ -723,6 +819,9 @@ async def start_ai_with_text(user_text: str):
                         pass
 
                 if piece.audio_b64:
+                    if not first_audio_logged:
+                        first_audio_logged = True
+                        print(f"[PERF] ai_start_to_first_audio={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
                     try:
                         audio_bytes = base64.b64decode(piece.audio_b64)
                     except Exception:
@@ -730,7 +829,10 @@ async def start_ai_with_text(user_text: str):
                     pcm8k, rate_state = _to_stream_pcm(audio_bytes, rate_state)
                     if pcm8k:
                         audio_sent = True
-                        await broadcast_pcm16_realtime(pcm8k)
+                        if not first_speaking_status:
+                            first_speaking_status = True
+                            await ui_broadcast_status("speaking")
+                        await enqueue_pcm(pcm8k)
 
         except asyncio.CancelledError:
             # 被新一轮打断
@@ -740,6 +842,14 @@ async def start_ai_with_text(user_text: str):
             txt_buf.append(fallback_reply)
             print(f"[AI ERROR] {e}", flush=True)
         finally:
+            try:
+                await pcm_queue.put(None)
+                await playback_task
+            except asyncio.CancelledError:
+                playback_task.cancel()
+                raise
+            except Exception:
+                pass
             # 【修改】标记omni对话结束，恢复之前的导航模式
             global omni_conversation_active, omni_previous_nav_state
             omni_conversation_active = False
@@ -764,8 +874,10 @@ async def start_ai_with_text(user_text: str):
                 has_audio_client = any(not sc.abort_event.is_set() for sc in list(stream_clients))
                 await ui_broadcast_ai_reply(final_text, tts_fallback=(not audio_sent or not has_audio_client))
                 await ui_broadcast_final("[AI] " + final_text)
+                await ui_broadcast_status("idle")
             except Exception:
                 pass
+            print(f"[PERF] total_reply_time={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
 
     # 真正启动前先硬重置，保证**绝无**旧音频残留
     await soft_reset_audio("start_ai_with_text")
@@ -815,12 +927,35 @@ async def ws_audio(ws: WebSocket):
     streaming = False
     last_ts = time.monotonic()
     keepalive_task: Optional[asyncio.Task] = None
+    audio_sender_task: Optional[asyncio.Task] = None
+    audio_frame_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=40)
     audio_chunk_count = 0
     sent_frame_count = 0
     pcm_buffer = bytearray()
     pending_audio_chunks: Deque[bytes] = deque(maxlen=ASR_PENDING_MAX_CHUNKS)
     pending_first_ts: Optional[float] = None
     pending_drop_warned = False
+
+    async def stop_audio_sender():
+        nonlocal audio_sender_task
+        if audio_sender_task and not audio_sender_task.done():
+            if audio_sender_task is asyncio.current_task():
+                audio_sender_task = None
+            else:
+                audio_sender_task.cancel()
+                try:
+                    await audio_sender_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        audio_sender_task = None
+        try:
+            while True:
+                audio_frame_queue.get_nowait()
+                audio_frame_queue.task_done()
+        except asyncio.QueueEmpty:
+            pass
 
     async def stop_rec(send_notice: Optional[str] = None):
         nonlocal recognition, streaming, keepalive_task, pcm_buffer
@@ -829,6 +964,7 @@ async def ws_audio(ws: WebSocket):
             try: await keepalive_task
             except Exception: pass
         keepalive_task = None
+        await stop_audio_sender()
         if recognition:
             try: recognition.stop()
             except Exception: pass
@@ -899,6 +1035,44 @@ async def ws_audio(ws: WebSocket):
             return
         pending_first_ts = None
         pending_drop_warned = False
+
+    async def audio_sender_worker():
+        last_warn_ts = 0.0
+        while streaming and recognition is not None:
+            try:
+                data = await audio_frame_queue.get()
+            except asyncio.CancelledError:
+                break
+            try:
+                send_merged_audio_frames(data)
+            except Exception:
+                now = time.monotonic()
+                if now - last_warn_ts > 2.0:
+                    print("[AUDIO WARN] send_audio_frame failed in worker", flush=True)
+                    last_warn_ts = now
+                await on_sdk_error("send_audio_frame failed")
+                break
+            finally:
+                try:
+                    audio_frame_queue.task_done()
+                except Exception:
+                    pass
+
+    def enqueue_audio_frame(data: bytes):
+        if audio_frame_queue.full():
+            try:
+                audio_frame_queue.get_nowait()
+                audio_frame_queue.task_done()
+                now = time.monotonic()
+                if not hasattr(enqueue_audio_frame, "_last_warn") or now - enqueue_audio_frame._last_warn > 2.0:
+                    enqueue_audio_frame._last_warn = now
+                    print("[AUDIO WARN] audio frame queue full, dropped oldest frame", flush=True)
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            audio_frame_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            pass
 
     async def keepalive_loop():
         nonlocal last_ts, recognition, streaming
@@ -974,8 +1148,10 @@ async def ws_audio(ws: WebSocket):
                         streaming = True
                         print("[ASR] streaming=True", flush=True)
                         last_ts = time.monotonic()
+                        audio_sender_task = asyncio.create_task(audio_sender_worker())
                         keepalive_task = asyncio.create_task(keepalive_loop())
                         await ui_broadcast_partial("（已开始接收音频…）")
+                        await ui_broadcast_status("listening")
                         await ws.send_text("OK:STARTED")
                         await flush_pending_audio()
                     except Exception as e:
@@ -997,6 +1173,7 @@ async def ws_audio(ws: WebSocket):
                             try: recognition.send_audio_frame(SILENCE_20MS)
                             except Exception: break
                     await stop_rec(send_notice="OK:STOPPED")
+                    await ui_broadcast_status("idle")
 
                 elif raw.startswith("PROMPT:"):
                     # 设备端主动发起一轮：同样使用“先硬重置后播放”的强语义
@@ -1014,10 +1191,7 @@ async def ws_audio(ws: WebSocket):
                 if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
                     print(f"[AUDIO] chunk #{audio_chunk_count}: size={len(data)} bytes, streaming={streaming}", flush=True)
                 if streaming and recognition:
-                    try:
-                        send_merged_audio_frames(data)
-                    except Exception:
-                        await on_sdk_error("send_audio_frame failed")
+                    enqueue_audio_frame(data)
                 else:
                     buffer_pending_audio(data)
                     if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
