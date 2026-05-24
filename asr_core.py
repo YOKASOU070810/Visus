@@ -120,19 +120,30 @@ class ASRCallback:
         self._full_reset = full_system_reset_fn
         self._interrupt_lock = interrupt_lock
 
-    def on_open(self):  pass
-    def on_close(self): pass
-    def on_complete(self): pass
+    def on_open(self):
+        print("[ASR CALLBACK] on_open", flush=True)
+
+    def on_close(self):
+        print("[ASR CALLBACK] on_close", flush=True)
+
+    def on_complete(self):
+        print("[ASR CALLBACK] on_complete", flush=True)
 
     def on_error(self, err):
+        print(f"[ASR CALLBACK] on_error: {repr(err)}", flush=True)
         try:
             self._post(self._ui_partial(""))
             self._on_sdk_error(str(err))
         except Exception:
             pass
 
-    def on_result(self, result): self._handle(result)
-    def on_event(self,  event):  self._handle(event)
+    def on_result(self, result):
+        print("[ASR CALLBACK] on_result", flush=True)
+        self._handle(result)
+
+    def on_event(self, event):
+        print("[ASR CALLBACK] on_event", flush=True)
+        self._handle(event)
 
     def _has_hotword(self, text: str) -> bool:
         t = _normalize_cn(text)

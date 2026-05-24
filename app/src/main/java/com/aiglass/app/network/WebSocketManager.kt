@@ -84,6 +84,7 @@ class WebSocketManager(
     private var audioWs: WebSocket? = null
     private var viewerWs: WebSocket? = null
     private var uiWs: WebSocket? = null
+    private var audioChunkSendCount = 0L
 
     // Callbacks
     var onFrameReceived: ((ByteArray) -> Unit)? = null
@@ -103,9 +104,16 @@ class WebSocketManager(
     }
 
     fun sendAudioChunk(pcmBytes: ByteArray) {
-        val ws = audioWs ?: return
+        val ws = audioWs ?: run {
+            Log.w(TAG, "Audio WS not ready, dropping ${pcmBytes.size} bytes")
+            return
+        }
         if (_connectionState.value.audio) {
-            ws.send(pcmBytes.toByteString())
+            audioChunkSendCount += 1
+            val sent = ws.send(pcmBytes.toByteString())
+            Log.d(TAG, "Audio chunk #$audioChunkSendCount send: ${pcmBytes.size} bytes, success=$sent")
+        } else {
+            Log.w(TAG, "Audio WS disconnected, dropping ${pcmBytes.size} bytes")
         }
     }
 
@@ -191,6 +199,7 @@ class WebSocketManager(
                 Log.i(TAG, "Audio WS connected")
                 _connectionState.value = _connectionState.value.copy(audio = true)
                 reconnectCounters.remove(::connectAudio.hashCode().toString())
+                audioChunkSendCount = 0L
                 webSocket.send("START")  // 触发服务器启动 ASR 语音识别
             }
 

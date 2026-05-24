@@ -9,6 +9,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import androidx.camera.core.ImageProxy
+
 
 class CameraManager(
     private val lifecycleOwner: LifecycleOwner,
@@ -72,20 +77,79 @@ class CameraManager(
     }
 
     private fun imageProxyToJpeg(imageProxy: ImageProxy): ByteArray? {
-        // Prefer RGBA_8888 path if planes allow direct JPEG compression
-        if (imageProxy.format == ImageFormat.JPEG || imageProxy.format == ImageFormat.YUV_420_888) {
-            return try {
-                val bitmap = imageProxyToBitmap(imageProxy) ?: return null
-                val out = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-                bitmap.recycle()
-                out.toByteArray()
-            } catch (e: Exception) {
-                Log.e(TAG, "JPEG conversion error: ${e.message}")
+        return try {
+            val nv21 = yuv420888ToNv21(imageProxy)
+
+            val yuvImage = YuvImage(
+                nv21,
+                ImageFormat.NV21,
+                imageProxy.width,
+                imageProxy.height,
                 null
+            )
+
+            val out = ByteArrayOutputStream()
+            yuvImage.compressToJpeg(
+                Rect(0, 0, imageProxy.width, imageProxy.height),
+                70,
+                out
+            )
+
+            out.toByteArray()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun yuv420888ToNv21(imageProxy: ImageProxy): ByteArray {
+        val width = imageProxy.width
+        val height = imageProxy.height
+        val ySize = width * height
+        val nv21 = ByteArray(width * height * 3 / 2)
+
+        val yPlane = imageProxy.planes[0]
+        val uPlane = imageProxy.planes[1]
+        val vPlane = imageProxy.planes[2]
+
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+
+        val yRowStride = yPlane.rowStride
+        val yPixelStride = yPlane.pixelStride
+
+        var pos = 0
+
+        for (row in 0 until height) {
+            for (col in 0 until width) {
+                val index = row * yRowStride + col * yPixelStride
+                nv21[pos++] = yBuffer.get(index)
             }
         }
-        return null
+
+        val chromaHeight = height / 2
+        val chromaWidth = width / 2
+
+        val uRowStride = uPlane.rowStride
+        val uPixelStride = uPlane.pixelStride
+        val vRowStride = vPlane.rowStride
+        val vPixelStride = vPlane.pixelStride
+
+        var uvPos = ySize
+
+        for (row in 0 until chromaHeight) {
+            for (col in 0 until chromaWidth) {
+                val vIndex = row * vRowStride + col * vPixelStride
+                val uIndex = row * uRowStride + col * uPixelStride
+
+                // NV21 是 VU 顺序
+                nv21[uvPos++] = vBuffer.get(vIndex)
+                nv21[uvPos++] = uBuffer.get(uIndex)
+            }
+        }
+
+        return nv21
     }
 
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {

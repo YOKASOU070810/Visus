@@ -22,6 +22,7 @@ class AudioCaptureManager(
         private const val CHUNK_MS = 20
         const val BYTES_PER_CHUNK = SAMPLE_RATE * CHUNK_MS / 1000 * 2 // 640 bytes
         private const val SILENCE_PEAK_THRESHOLD = 350
+        private const val BYPASS_NOISE_GATE = true
     }
 
     private var audioRecord: AudioRecord? = null
@@ -49,11 +50,17 @@ class AudioCaptureManager(
 
             scope.launch {
                 val buffer = ByteArray(BYTES_PER_CHUNK)
+                var chunkCount = 0L
                 while (isActive && isRecording) {
                     val bytesRead = audioRecord?.read(buffer, 0, BYTES_PER_CHUNK) ?: -1
                     if (bytesRead > 0) {
+                        chunkCount += 1
+                        Log.d(TAG, "Audio chunk #$chunkCount read: $bytesRead bytes")
                         val chunk = buffer.copyOf(bytesRead)
-                        onAudioChunk(applyLightNoiseGate(chunk))
+                        val outgoingChunk = if (BYPASS_NOISE_GATE) chunk else applyLightNoiseGate(chunk)
+                        onAudioChunk(outgoingChunk)
+                    } else if (bytesRead < 0) {
+                        Log.w(TAG, "AudioRecord read returned error: $bytesRead")
                     }
                 }
             }

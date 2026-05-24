@@ -1,6 +1,6 @@
 # app_main.py
 # -*- coding: utf-8 -*-
-import os, sys, time, json, asyncio, base64, io, wave
+import os, sys, time, json, asyncio, base64, io, wave, traceback
 try:
     import audioop
 except ModuleNotFoundError:
@@ -78,6 +78,11 @@ from dashscope import audio as dash_audio  # 若未安装，会在原项目里�
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 if not API_KEY:
     raise RuntimeError("未设置 DASHSCOPE_API_KEY")
+print(
+    f"[ASR] DASHSCOPE_API_KEY loaded={bool(API_KEY)}, "
+    f"prefix={API_KEY[:3]}..., suffix={API_KEY[-4:] if len(API_KEY) >= 4 else '****'}",
+    flush=True
+)
 
 MODEL        = "paraformer-realtime-v2"
 SAMPLE_RATE  = 16000
@@ -85,6 +90,8 @@ AUDIO_FMT    = "pcm"
 CHUNK_MS     = 20
 BYTES_CHUNK  = SAMPLE_RATE * CHUNK_MS // 1000 * 2
 SILENCE_20MS = bytes(BYTES_CHUNK)
+ASR_SEND_BYTES = BYTES_CHUNK * 5  # 100ms @ 16kHz/16bit/mono = 3200 bytes
+ASR_PENDING_MAX_CHUNKS = 100      # 2 seconds of 20ms chunks
 
 # ---- 引入我们的模块 ----
 from audio_stream import (
@@ -688,8 +695,9 @@ async def start_ai_with_text(user_text: str):
         content_list = [{
             "type": "text",
             "text": (
-                "你是面向视障人士的智能出行助手。请用中文简短回答，"
-                "适合语音播报。不要长篇大论，不要编造没有看到或没有检测到的环境信息。"
+                "请把下面这句话当作用户正在和你说话来回应。"
+                "你可以自然聊天，也可以根据画面提供出行帮助。"
+                "先回应用户，再给出简短有用的信息。"
             )
         }]
         if last_frames:
@@ -807,9 +815,15 @@ async def ws_audio(ws: WebSocket):
     streaming = False
     last_ts = time.monotonic()
     keepalive_task: Optional[asyncio.Task] = None
+    audio_chunk_count = 0
+    sent_frame_count = 0
+    pcm_buffer = bytearray()
+    pending_audio_chunks: Deque[bytes] = deque(maxlen=ASR_PENDING_MAX_CHUNKS)
+    pending_first_ts: Optional[float] = None
+    pending_drop_warned = False
 
     async def stop_rec(send_notice: Optional[str] = None):
-        nonlocal recognition, streaming, keepalive_task
+        nonlocal recognition, streaming, keepalive_task, pcm_buffer
         if keepalive_task and not keepalive_task.done():
             keepalive_task.cancel()
             try: await keepalive_task
@@ -821,12 +835,70 @@ async def ws_audio(ws: WebSocket):
             recognition = None
         await set_current_recognition(None)
         streaming = False
+        pcm_buffer.clear()
         if send_notice:
             try: await ws.send_text(send_notice)
             except Exception: pass
 
     async def on_sdk_error(_msg: str):
+        print(f"[ASR ERROR] SDK callback error: {_msg}", flush=True)
+        print("[ASR ERROR] failed to start recognition, audio will not be recognized", flush=True)
+        try:
+            await ui_broadcast_partial(f"[ASR ERROR] {_msg}")
+        except Exception:
+            pass
         await stop_rec(send_notice="RESTART")
+
+    def parse_audio_command(raw: str) -> str:
+        text = (raw or "").strip()
+        if not text:
+            return ""
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return str(payload.get("type") or payload.get("cmd") or payload.get("command") or "").strip().upper()
+        except Exception:
+            pass
+        return text.upper()
+
+    def buffer_pending_audio(data: bytes):
+        nonlocal pending_first_ts, pending_drop_warned
+        now = time.monotonic()
+        if pending_first_ts is None:
+            pending_first_ts = now
+        if len(pending_audio_chunks) >= ASR_PENDING_MAX_CHUNKS and not pending_drop_warned:
+            print("[ASR WARN] ASR not ready after 2 seconds, dropping buffered chunks", flush=True)
+            pending_drop_warned = True
+        pending_audio_chunks.append(data)
+
+    def send_merged_audio_frames(data: bytes):
+        nonlocal last_ts, sent_frame_count, pcm_buffer
+        if not data:
+            return
+        pcm_buffer.extend(data)
+        while len(pcm_buffer) >= ASR_SEND_BYTES:
+            frame = bytes(pcm_buffer[:ASR_SEND_BYTES])
+            del pcm_buffer[:ASR_SEND_BYTES]
+            recognition.send_audio_frame(frame)
+            sent_frame_count += 1
+            last_ts = time.monotonic()
+            if sent_frame_count <= 5 or sent_frame_count % 50 == 0:
+                print(f"[AUDIO] sent merged frame #{sent_frame_count}: {len(frame)} bytes", flush=True)
+
+    async def flush_pending_audio():
+        nonlocal pending_first_ts, pending_drop_warned
+        if not pending_audio_chunks:
+            return
+        buffered = len(pending_audio_chunks)
+        print(f"[ASR] flushing {buffered} buffered audio chunks", flush=True)
+        try:
+            while pending_audio_chunks:
+                send_merged_audio_frames(pending_audio_chunks.popleft())
+        except Exception:
+            await on_sdk_error("send buffered audio failed")
+            return
+        pending_first_ts = None
+        pending_drop_warned = False
 
     async def keepalive_loop():
         nonlocal last_ts, recognition, streaming
@@ -860,7 +932,8 @@ async def ws_audio(ws: WebSocket):
 
             if "text" in msg and msg["text"] is not None:
                 raw = (msg["text"] or "").strip()
-                cmd = raw.upper()
+                print(f"[AUDIO TEXT] {raw}", flush=True)
+                cmd = parse_audio_command(raw)
 
                 if cmd == "START":
                     print("[AUDIO] START received")
@@ -881,17 +954,42 @@ async def ws_audio(ws: WebSocket):
                         interrupt_lock=interrupt_lock,
                     )
 
-                    recognition = dash_audio.asr.Recognition(
-                        api_key=API_KEY, model=MODEL, format=AUDIO_FMT,
-                        sample_rate=SAMPLE_RATE, callback=cb
-                    )
-                    recognition.start()
-                    await set_current_recognition(recognition)
-                    streaming = True
-                    last_ts = time.monotonic()
-                    keepalive_task = asyncio.create_task(keepalive_loop())
-                    await ui_broadcast_partial("（已开始接收音频…）")
-                    await ws.send_text("OK:STARTED")
+                    try:
+                        print(
+                            f"[ASR] DASHSCOPE_API_KEY loaded={bool(API_KEY)}, "
+                            f"prefix={API_KEY[:3]}..., suffix={API_KEY[-4:] if len(API_KEY) >= 4 else '****'}",
+                            flush=True
+                        )
+                        if not API_KEY:
+                            raise RuntimeError("DASHSCOPE_API_KEY is empty")
+                        print("[ASR] creating recognition...", flush=True)
+                        recognition = dash_audio.asr.Recognition(
+                            api_key=API_KEY, model=MODEL, format=AUDIO_FMT,
+                            sample_rate=SAMPLE_RATE, callback=cb
+                        )
+                        print("[ASR] recognition.start() calling...", flush=True)
+                        recognition.start()
+                        print("[ASR] recognition.start() returned", flush=True)
+                        await set_current_recognition(recognition)
+                        streaming = True
+                        print("[ASR] streaming=True", flush=True)
+                        last_ts = time.monotonic()
+                        keepalive_task = asyncio.create_task(keepalive_loop())
+                        await ui_broadcast_partial("（已开始接收音频…）")
+                        await ws.send_text("OK:STARTED")
+                        await flush_pending_audio()
+                    except Exception as e:
+                        streaming = False
+                        recognition = None
+                        await set_current_recognition(None)
+                        print(f"[ASR ERROR] failed to start recognition: {repr(e)}", flush=True)
+                        traceback.print_exc()
+                        print("[ASR ERROR] failed to start recognition, audio will not be recognized", flush=True)
+                        try:
+                            await ui_broadcast_partial(f"[ASR ERROR] failed to start recognition: {repr(e)}")
+                            await ws.send_text("ERR:ASR_START_FAILED")
+                        except Exception:
+                            pass
 
                 elif cmd == "STOP":
                     if recognition:
@@ -911,12 +1009,19 @@ async def ws_audio(ws: WebSocket):
                         await ws.send_text("ERR:EMPTY_PROMPT")
 
             elif "bytes" in msg and msg["bytes"] is not None:
+                audio_chunk_count += 1
+                data = msg["bytes"]
+                if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
+                    print(f"[AUDIO] chunk #{audio_chunk_count}: size={len(data)} bytes, streaming={streaming}", flush=True)
                 if streaming and recognition:
                     try:
-                        recognition.send_audio_frame(msg["bytes"])
-                        last_ts = time.monotonic()
+                        send_merged_audio_frames(data)
                     except Exception:
                         await on_sdk_error("send_audio_frame failed")
+                else:
+                    buffer_pending_audio(data)
+                    if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
+                        print("[AUDIO] chunk received before ASR streaming is ready", flush=True)
 
     except Exception as e:
         print(f"\n[WS ERROR] {e}")
