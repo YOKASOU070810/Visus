@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  visus:
+    build:
+      context: ..
+      dockerfile: config/Dockerfile
+    container_name: visus
+    restart: unless-stopped
+    
+    # 端口映射
+    ports:
+      - "8081:8081"      # Web 服务
+    
+    # 环境变量（从 .env 文件读取）
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - BLIND_PATH_MODEL=${BLIND_PATH_MODEL:-assets/models/yolo-seg.pt}
+      - OBSTACLE_MODEL=${OBSTACLE_MODEL:-assets/models/yoloe-11l-seg.pt}
+      - YOLOE_MODEL_PATH=${YOLOE_MODEL_PATH:-assets/models/yoloe-11l-seg.pt}
+      - ENABLE_TTS=${ENABLE_TTS:-true}
+      - TTS_INTERVAL_SEC=${TTS_INTERVAL_SEC:-1.0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    # 卷挂载
+    volumes:
+      - ../assets/models:/app/assets/models:ro    # 模型文件（只读）
+      - ../recordings:/app/recordings             # 录制文件
+    
+    # GPU 支持（需要 nvidia-docker）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # 网络模式
+    network_mode: bridge
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Visus 智能导航</string>
+    <string name="channel_name">Visus 推流服务</string>
+    <string name="channel_description">保持摄像头和音频推流服务运行</string>
+    <string name="notification_title">Visus 智能导航</string>
+    <string name="notification_text">正在向服务器推送视频和音频...</string>
+    <string name="settings_title">服务器设置</string>
+    <string name="server_ip_hint">服务器 IP</string>
+    <string name="server_port_hint">端口</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="start_streaming">开始推流</string>
+    <string name="stop_streaming">停止推流</string>
+    <string name="streaming">推流中</string>
+    <string name="stopped">已停止</string>
+    <string name="server_address">服务器地址</string>
+    <string name="connection_status">连接状态</string>
+</resources>

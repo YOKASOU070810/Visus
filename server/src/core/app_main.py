@@ -124,7 +124,7 @@ import atexit
 app = FastAPI()
 
 # ====== 状态与容器 ======
-app.mount("/static", StaticFiles(directory="web/static"), name="static")
+app.mount("/static", StaticFiles(directory="../web/static"), name="static")
 
 ui_clients: Dict[int, WebSocket] = {}
 current_partial: str = ""
@@ -883,7 +883,7 @@ async def start_ai_with_text(user_text: str):
 # ---------- 页面 / 健康 ----------
 @app.get("/", response_class=HTMLResponse)
 def root():
-    with open(os.path.join("web", "templates", "index.html"), "r", encoding="utf-8") as f:
+    with open(os.path.join("..", "web", "templates", "index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 @app.get("/api/health", response_class=PlainTextResponse)

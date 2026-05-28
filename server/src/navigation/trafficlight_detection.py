@@ -18,7 +18,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ========= 配置参数 =========
-YOLO_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "models", "trafficlight.pt")
+YOLO_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "assets", "models", "trafficlight.pt")
 
 # ========= 显示参数 =========
 CONF_THRESHOLD = 0.25  # 置信度阈值

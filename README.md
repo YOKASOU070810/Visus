@@ -1,27 +1,43 @@
-# Visus 智能导航助手 🤖📱
+# Visus 智能导航助手
 
-<div align="center">
-
-面向视障人士的安卓端 AI 辅助出行系统，集成盲道导航、过马路辅助、物品识别、实时语音交互等功能。
+面向视障人士的 AI 辅助出行系统，集成盲道导航、过马路辅助、物品识别、实时语音交互等功能。
 
 **⚠️ 免责声明**：本项目仅供学习交流使用，请勿直接用于视障人群的实际出行场景。
 
-[功能特性](#功能特性) • [快速开始](#快速开始) • [系统架构](#系统架构) • [使用说明](#使用说明) • [API 文档](#api-文档)
-
-</div>
-
 ---
 
-## 📋 目录
+## 📁 项目结构
 
-- [功能特性](#功能特性)
-- [系统要求](#系统要求)
-- [快速开始](#快速开始)
-- [系统架构](#系统架构)
-- [使用说明](#使用说明)
-- [配置说明](#配置说明)
-- [开发文档](#开发文档)
-- [更新日志](#更新日志)
+本项目分为两大模块：
+
+```
+Visus-main/
+├── app/                          # 应用端（Android 客户端）
+│   └── android/                  # Android 原生应用源码
+│       ├── app/src/main/         # Kotlin 源码、资源文件
+│       ├── build.gradle.kts      # Gradle 构建配置
+│       └── Visus-demo.apk        # 预编译 APK（可直接安装）
+│
+├── server/                       # 服务器端（Python 后端 + Web 监控）
+│   ├── src/                      # Python 核心源码
+│   │   ├── core/                 # FastAPI 主服务、状态管理
+│   │   ├── navigation/           # 导航工作流（盲道、过马路）
+│   │   ├── vision/               # 视觉检测（YOLO、MediaPipe）
+│   │   ├── voice/                # 语音处理（ASR、TTS、Omni）
+│   │   ├── audio/                # 音频工具（压缩、录制）
+│   │   └── utils/                # 工具模块
+│   ├── web/                      # Web 前端（监控页面）
+│   │   ├── templates/            # HTML 模板
+│   │   └── static/               # JS / CSS / 资源
+│   ├── config/                   # 部署配置
+│   │   ├── requirements.txt      # Python 依赖
+│   │   ├── Dockerfile            # Docker 镜像构建
+│   │   └── docker-compose.yml    # Docker Compose 部署
+│   ├── assets/                   # 资源文件（模型、音频提示）
+│   └── docs/                     # 文档与许可证
+│
+└── README.md                     # 本文件
+```
 
 ---
 
@@ -97,17 +113,18 @@
 
 ## 🚀 快速开始
 
-### 1. 克隆项目
+### 一、服务器端部署
+
+#### 1. 进入服务器目录
 
 ```bash
-git clone https://github.com/yourusername/visus.git
-cd visus
+cd server
 ```
 
-### 2. 安装依赖
+#### 2. 安装依赖
 
-#### 创建虚拟环境（推荐）
 ```bash
+# 创建虚拟环境（推荐）
 python -m venv venv
 
 # Windows
@@ -115,14 +132,13 @@ venv\Scripts\activate
 
 # Linux/macOS
 source venv/bin/activate
-```
 
-#### 安装 Python 包
-```bash
+# 安装 Python 包
 pip install -r config/requirements.txt
 ```
 
-#### 安装 PyTorch（GPU 版本）
+#### 3. 安装 PyTorch（GPU 版本）
+
 ```bash
 pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118
 ```
@@ -134,23 +150,23 @@ pip install torch torchvision
 
 > **注意**：Windows 上 PyAudio 可能需要手动安装，请访问 https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio
 
-### 3. 下载模型文件
+#### 4. 下载模型文件
 
-将以下模型文件放入 `assets/models/` 目录：
+将以下模型文件放入 `server/assets/models/` 目录：
 
 | 模型文件 | 用途 | 大小 | 来源 |
 |---------|------|------|------|
-| `yolo-seg.pt` | 盲道分割 | ~50MB | [ModelScope](https://www.modelscope.cn/models/archifancy/AIGlasses_for_navigation) |
-| `yoloe-11l-seg.pt` | 开放词汇检测 | ~80MB | [ModelScope](https://www.modelscope.cn/models/archifancy/AIGlasses_for_navigation) |
-| `shoppingbest5.pt` | 物品识别 | ~30MB | [ModelScope](https://www.modelscope.cn/models/archifancy/AIGlasses_for_navigation) |
-| `trafficlight.pt` | 红绿灯检测 | ~20MB | [ModelScope](https://www.modelscope.cn/models/archifancy/AIGlasses_for_navigation) |
+| `yolo-seg.pt` | 盲道分割 | ~50MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
+| `yoloe-11l-seg.pt` | 开放词汇检测 | ~80MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
+| `shoppingbest5.pt` | 物品识别 | ~30MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
+| `trafficlight.pt` | 红绿灯检测 | ~20MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
 | `hand_landmarker.task` | 手部检测 | ~15MB | [MediaPipe Models](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker#models) |
 
-> 模型下载地址：https://www.modelscope.cn/models/archifancy/AIGlasses_for_navigation
+> 模型下载地址：https://www.modelscope.cn/models/archifancy/Visus_for_navigation
 
-### 4. 配置 API 密钥
+#### 5. 配置 API 密钥
 
-在项目根目录创建 `.env` 文件：
+在 `server/` 目录创建 `.env` 文件：
 
 ```bash
 # .env
@@ -167,7 +183,7 @@ $env:DASHSCOPE_API_KEY="sk-your-api-key-here"
 export DASHSCOPE_API_KEY="sk-your-api-key-here"
 ```
 
-### 5. 启动服务器
+#### 6. 启动服务器
 
 ```bash
 python src/core/app_main.py
@@ -175,14 +191,28 @@ python src/core/app_main.py
 
 服务器将在 `http://0.0.0.0:8081` 启动，打开浏览器访问即可看到实时监控界面。
 
-### 6. 安装手机 App
+---
 
-1. 将 `mobile/Visus-demo.apk` 安装到 Android 手机
-2. 打开 App → 点击右上角齿轮图标
-3. 输入电脑的局域网 IP 地址和端口 `8081`
+### 二、客户端安装（Android）
+
+#### 方式一：直接安装 APK
+
+1. 将 `app/android/Visus-demo.apk` 传输到 Android 手机
+2. 允许安装未知来源应用
+3. 安装并打开 App
+
+#### 方式二：自行编译
+
+1. 使用 Android Studio 打开 `app/android/` 目录
+2. 同步 Gradle，编译项目
+3. 生成 APK 或直接在模拟器/真机上运行
+
+#### 配置服务器地址
+
+1. 打开 App → 点击右上角齿轮图标进入设置
+2. 输入电脑的局域网 IP 地址（如 `192.168.1.100`）
+3. 端口填写 `8081`
 4. 保存后自动连接
-
-> 如需自行编译 App，请参考 [Android Studio 构建指南](docs/ANDROID_STUDIO_BUILD.md)
 
 ---
 
@@ -258,23 +288,23 @@ python src/core/app_main.py
 
 | 模块 | 文件 | 功能 |
 |------|------|------|
-| **主应用** | `src/core/app_main.py` | FastAPI 服务、WebSocket 管理、状态协调 |
-| **导航统领** | `src/core/navigation_master.py` | 状态机管理、模式切换、语音节流 |
-| **模型管理** | `src/core/models.py` | AI 模型加载与设备管理 |
-| **盲道导航** | `src/navigation/workflow_blindpath.py` | 盲道检测、避障、转弯引导 |
-| **过马路导航** | `src/navigation/workflow_crossstreet.py` | 斑马线检测、红绿灯识别、对齐引导 |
-| **斑马线感知** | `src/navigation/crosswalk_awareness.py` | 斑马线位置与方向检测 |
-| **红绿灯检测** | `src/navigation/trafficlight_detection.py` | 红绿灯颜色与状态识别 |
-| **物品查找** | `src/vision/yolomedia.py` | 物品检测、手部引导、抓取确认 |
-| **YOLO-E 后端** | `src/vision/yoloe_backend.py` | 开放词汇检测后端 |
-| **障碍物检测** | `src/vision/obstacle_detector_client.py` | 障碍物检测客户端 |
-| **语音识别** | `src/voice/asr_core.py` | 实时 ASR、VAD、指令解析 |
-| **语音合成** | `src/voice/omni_client.py` | Qwen-Omni 流式语音生成 |
-| **音频播放** | `src/voice/audio_player.py` | 多路混音、TTS 播放、音量控制 |
-| **音频流** | `src/voice/audio_stream.py` | 音频流管理与 WebSocket 推流 |
-| **音频压缩** | `src/audio/audio_compressor.py` | ADPCM/μ-law 音频压缩 |
-| **同步录制** | `src/audio/sync_recorder.py` | 音视频同步录制 |
-| **桥接 IO** | `src/utils/bridge_io.py` | 线程安全的帧缓冲与分发 |
+| **主应用** | `server/src/core/app_main.py` | FastAPI 服务、WebSocket 管理、状态协调 |
+| **导航统领** | `server/src/core/navigation_master.py` | 状态机管理、模式切换、语音节流 |
+| **模型管理** | `server/src/core/models.py` | AI 模型加载与设备管理 |
+| **盲道导航** | `server/src/navigation/workflow_blindpath.py` | 盲道检测、避障、转弯引导 |
+| **过马路导航** | `server/src/navigation/workflow_crossstreet.py` | 斑马线检测、红绿灯识别、对齐引导 |
+| **斑马线感知** | `server/src/navigation/crosswalk_awareness.py` | 斑马线位置与方向检测 |
+| **红绿灯检测** | `server/src/navigation/trafficlight_detection.py` | 红绿灯颜色与状态识别 |
+| **物品查找** | `server/src/vision/yolomedia.py` | 物品检测、手部引导、抓取确认 |
+| **YOLO-E 后端** | `server/src/vision/yoloe_backend.py` | 开放词汇检测后端 |
+| **障碍物检测** | `server/src/vision/obstacle_detector_client.py` | 障碍物检测客户端 |
+| **语音识别** | `server/src/voice/asr_core.py` | 实时 ASR、VAD、指令解析 |
+| **语音合成** | `server/src/voice/omni_client.py` | Qwen-Omni 流式语音生成 |
+| **音频播放** | `server/src/voice/audio_player.py` | 多路混音、TTS 播放、音量控制 |
+| **音频流** | `server/src/voice/audio_stream.py` | 音频流管理与 WebSocket 推流 |
+| **音频压缩** | `server/src/audio/audio_compressor.py` | ADPCM/μ-law 音频压缩 |
+| **同步录制** | `server/src/audio/sync_recorder.py` | 音视频同步录制 |
+| **桥接 IO** | `server/src/utils/bridge_io.py` | 线程安全的帧缓冲与分发 |
 
 ---
 
@@ -374,7 +404,7 @@ python src/core/app_main.py
 
 ### 环境变量
 
-创建 `.env` 文件配置以下参数：
+在 `server/` 目录创建 `.env` 文件配置以下参数：
 
 ```bash
 # 阿里云 API（必需）
@@ -413,10 +443,10 @@ ENABLE_TTS=true               # 启用语音播报
 如果模型文件不在默认位置，可以在相应文件中修改：
 
 ```python
-# src/navigation/workflow_blindpath.py
+# server/src/navigation/workflow_blindpath.py
 seg_model_path = "your/custom/path/yolo-seg.pt"
 
-# src/vision/yolomedia.py
+# server/src/vision/yolomedia.py
 YOLO_MODEL_PATH = "your/custom/path/shoppingbest5.pt"
 HAND_TASK_PATH = "your/custom/path/hand_landmarker.task"
 ```
@@ -426,11 +456,11 @@ HAND_TASK_PATH = "your/custom/path/hand_landmarker.task"
 根据硬件性能调整：
 
 ```python
-# src/vision/yolomedia.py
+# server/src/vision/yolomedia.py
 HAND_DOWNSCALE = 0.8    # 手部检测降采样（越小越快，精度降低）
 HAND_FPS_DIV = 1        # 手部检测抽帧（2=隔帧，3=每3帧）
 
-# src/navigation/workflow_blindpath.py  
+# server/src/navigation/workflow_blindpath.py  
 FEATURE_PARAMS = dict(
     maxCorners=600,      # 光流特征点数（越少越快）
     qualityLevel=0.001,  # 特征点质量
@@ -442,31 +472,9 @@ FEATURE_PARAMS = dict(
 
 ## 🛠️ 开发文档
 
-### 项目结构
-
-```
-Visus-main/
-├── src/                    # 核心源代码
-│   ├── core/               # 主应用与状态管理
-│   ├── navigation/         # 导航工作流
-│   ├── vision/             # 视觉检测
-│   ├── voice/              # 语音处理
-│   ├── audio/              # 音频工具
-│   └── utils/              # 工具模块
-├── web/                    # Web 前端
-│   ├── templates/          # HTML 模板
-│   └── static/             # JS/CSS/资源
-├── mobile/                 # 安卓端应用
-├── assets/                 # 资源文件（模型、音频）
-├── config/                 # 配置文件
-└── docs/                   # 文档
-```
-
-详细结构请参考 [PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)
-
 ### 添加新的语音指令
 
-1. 在 `src/core/app_main.py` 的 `start_ai_with_text_custom()` 函数中添加：
+1. 在 `server/src/core/app_main.py` 的 `start_ai_with_text_custom()` 函数中添加：
 
 ```python
 # 检查新指令
@@ -486,7 +494,7 @@ allowed_keywords = ["帮我看", "帮我找", "你的新关键词"]
 
 ### 扩展导航功能
 
-1. 在 `src/navigation/workflow_blindpath.py` 添加新状态：
+1. 在 `server/src/navigation/workflow_blindpath.py` 添加新状态：
 
 ```python
 # 在 BlindPathNavigator.__init__() 中初始化
@@ -497,10 +505,9 @@ def process_frame(self, image):
     if self.your_new_state_var:
         # 自定义处理逻辑
         guidance_text = "新状态引导"
-    # ...
 ```
 
-2. 在 `src/core/navigation_master.py` 添加状态机状态：
+2. 在 `server/src/core/navigation_master.py` 添加状态机状态：
 
 ```python
 class NavigationMaster:
@@ -524,7 +531,7 @@ class YourModelWrapper:
         return results
 ```
 
-2. 在 `src/core/app_main.py` 中加载：
+2. 在 `server/src/core/app_main.py` 中加载：
 
 ```python
 your_model = YourModelWrapper("assets/models/your_model.pt")
@@ -555,24 +562,18 @@ PERF_DEBUG = True  # 打印处理时间
 
 ---
 
-## 📱 安卓端说明
+### 自定义系统提示词
 
-### 安装 APK
+AI 对话的默认系统提示词位于 `server/prompt.txt`，定义了面向视障人士的辅助服务行为准则，包括：
 
-1. 将 `mobile/Visus-demo.apk` 传输到手机
-2. 允许安装未知来源应用
-3. 安装并打开 App
+- **路况识别**：描述前方道路环境，区分人行道、马路、台阶、障碍物等
+- **物品找寻**：精准描述物品位置、外观、距离，指引伸手方向
+- **电梯/门体判断**：识别电梯运行状态、门开关状态
+- **导航指引**：给出直行、左转、右转等行动指令
+- **通用视觉解读**：识别文字、标识、红绿灯、车牌等
+- **情感陪伴**：温和耐心的语气，危险场景下的情绪安抚
 
-### 配置服务器地址
-
-1. 点击右上角齿轮图标进入设置
-2. 输入电脑局域网 IP 地址（如 `192.168.1.100`）
-3. 端口填写 `8081`
-4. 保存后自动连接
-
-### 自行编译
-
-如需自行编译安卓端，请参考 [Android Studio 构建指南](docs/ANDROID_STUDIO_BUILD.md)
+如需修改 AI 的说话风格或增加新的行为规则，直接编辑 `server/prompt.txt` 即可，无需重启服务（下次对话自动生效）。
 
 ---
 
@@ -581,12 +582,16 @@ PERF_DEBUG = True  # 打印处理时间
 ### 使用 Docker Compose
 
 ```bash
+cd server
+
 docker-compose -f config/docker-compose.yml up -d
 ```
 
 ### 构建镜像
 
 ```bash
+cd server
+
 docker build -f config/Dockerfile -t visus:latest .
 docker run -p 8081:8081 --gpus all visus:latest
 ```
@@ -594,8 +599,6 @@ docker run -p 8081:8081 --gpus all visus:latest
 ---
 
 ## 📝 更新日志
-
-详见 [CHANGELOG.md](docs/CHANGELOG.md)
 
 ### 最新版本 [1.0.0]
 
@@ -622,7 +625,7 @@ docker run -p 8081:8081 --gpus all visus:latest
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](docs/LICENSE) 文件
+本项目采用 MIT 许可证 - 详见 [server/docs/LICENSE](server/docs/LICENSE) 文件
 
 ---
 
@@ -638,7 +641,7 @@ docker run -p 8081:8081 --gpus all visus:latest
 
 <div align="center">
 
-**[⬆ 回到顶部](#visus-智能导航助手-)**
+**[⬆ 回到顶部](#visus-智能导航助手)**
 
 Made with ❤️ for a more accessible world
 
