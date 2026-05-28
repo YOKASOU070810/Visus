@@ -218,7 +218,7 @@ def main(headless: bool = True, stop_event=None):
     frame_none_count = 0
     last_frame_log_time = time.time()
 
-    print("[TRAFFIC] 等待 ESP32 画面...")
+    print("[TRAFFIC] 等待移动设备画面...")
 
     try:
         while True:

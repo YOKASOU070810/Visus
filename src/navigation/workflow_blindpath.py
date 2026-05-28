@@ -166,14 +166,14 @@ class BlindPathNavigator:
         self.frame_counter = 0
         
         # 直行提示配置 - 支持环境变量
-        self.guide_interval = float(os.getenv("AIGLASS_STRAIGHT_INTERVAL", "4.0"))  # 播报间隔（秒）
+        self.guide_interval = float(os.getenv("VISUS_STRAIGHT_INTERVAL", "4.0"))  # 播报间隔（秒）
         self.last_guide_time = 0.0
-        self.straight_continuous_mode = os.getenv("AIGLASS_STRAIGHT_CONTINUOUS", "1") == "1"  # 持续播报模式
-        self.straight_repeat_limit = int(os.getenv("AIGLASS_STRAIGHT_LIMIT", "2"))  # 限制模式下的最大次数
+        self.straight_continuous_mode = os.getenv("VISUS_STRAIGHT_CONTINUOUS", "1") == "1"  # 持续播报模式
+        self.straight_repeat_limit = int(os.getenv("VISUS_STRAIGHT_LIMIT", "2"))  # 限制模式下的最大次数
         self.straight_repeat_count = 0
         
         # 【新增】方向指令持续播报配置
-        self.direction_interval = float(os.getenv("AIGLASS_DIRECTION_INTERVAL", "3.0"))  # 方向指令间隔（秒）
+        self.direction_interval = float(os.getenv("VISUS_DIRECTION_INTERVAL", "3.0"))  # 方向指令间隔（秒）
         self.last_direction_time = 0.0
         self.last_direction_message = ""
         
@@ -231,8 +231,8 @@ class BlindPathNavigator:
         
         # 障碍物检测间隔
         # 障碍物检测优化参数 - 从环境变量读取，支持性能调优
-        self.OBSTACLE_DETECTION_INTERVAL = int(os.getenv("AIGLASS_OBS_INTERVAL", "15"))  # 默认每5帧检测一次
-        self.OBSTACLE_CACHE_DURATION_FRAMES = int(os.getenv("AIGLASS_OBS_CACHE_FRAMES", "10"))  # 缓存10帧
+        self.OBSTACLE_DETECTION_INTERVAL = int(os.getenv("VISUS_OBS_INTERVAL", "15"))  # 默认每5帧检测一次
+        self.OBSTACLE_CACHE_DURATION_FRAMES = int(os.getenv("VISUS_OBS_CACHE_FRAMES", "10"))  # 缓存10帧
         
         # 障碍物播报管理
         self.last_obstacle_speech = ""
@@ -240,8 +240,8 @@ class BlindPathNavigator:
         self.obstacle_speech_cooldown = 5.0  # 相同障碍物3秒内不重复播报
         
         # 掩码稳定化参数（已禁用光流外推，这些参数不再使用）
-        self.MASK_STAB_MIN_AREA = int(os.getenv("AIGLASS_MASK_MIN_AREA", "1500"))
-        self.MASK_STAB_KERNEL = int(os.getenv("AIGLASS_MASK_MORPH", "3"))
+        self.MASK_STAB_MIN_AREA = int(os.getenv("VISUS_MASK_MIN_AREA", "1500"))
+        self.MASK_STAB_KERNEL = int(os.getenv("VISUS_MASK_MORPH", "3"))
         self.MASK_MISS_TTL = 0  # 【修改为0】禁用光流外推，完全实时
         self.blind_miss_ttl = 0
         self.cross_miss_ttl = 0
@@ -250,7 +250,7 @@ class BlindPathNavigator:
         self.flow_iou_threshold = 0.3  # IoU低于此值时重新初始化光流点
         
         # 【新增】盲道YOLO检测间隔
-        self.BLINDPATH_DETECTION_INTERVAL = int(os.getenv("AIGLASS_BLINDPATH_INTERVAL", "8"))  # 每2帧检测一次
+        self.BLINDPATH_DETECTION_INTERVAL = int(os.getenv("VISUS_BLINDPATH_INTERVAL", "8"))  # 每2帧检测一次
         self.last_blindpath_detection_frame = 0
         self.last_blindpath_mask = None
         self.last_crosswalk_mask = None
@@ -275,7 +275,7 @@ class BlindPathNavigator:
         返回: 'red', 'green', 'yellow', 'unknown'
         """
         # 模拟模式（用于测试）
-        if os.getenv("AIGLASS_SIMULATE_TRAFFIC_LIGHT", "0") == "1":
+        if os.getenv("VISUS_SIMULATE_TRAFFIC_LIGHT", "0") == "1":
             # 根据帧数模拟红绿灯变化
             cycle = (self.frame_counter // 100) % 3
             if cycle == 0:
@@ -354,7 +354,7 @@ class BlindPathNavigator:
         if hasattr(self, 'frame_counter') and self.frame_counter % 30 == 0:
             logger.info(f"[HSV检测] 红:{area_red}, 绿:{area_green}, 黄:{area_yellow}")
             # 保存调试图像
-            if os.getenv("AIGLASS_DEBUG_TRAFFIC_LIGHT", "0") == "1":
+            if os.getenv("VISUS_DEBUG_TRAFFIC_LIGHT", "0") == "1":
                 debug_dir = "traffic_light_debug"
                 os.makedirs(debug_dir, exist_ok=True)
                 cv2.imwrite(f"{debug_dir}/frame_{self.frame_counter}_roi.jpg", roi)
@@ -1992,7 +1992,7 @@ class BlindPathNavigator:
             
             # 【注意】ObstacleDetectorClient 已经做了以下过滤：
             # 1. 尺寸过滤（太大的物体，面积超过70%的会被过滤）
-            # 2. 置信度过滤（根据环境变量 AIGLASS_OBS_CONF，默认0.25）
+            # 2. 置信度过滤（根据环境变量 VISUS_OBS_CONF，默认0.25）
             # 3. 如果提供了 path_mask，会做路径相关的空间过滤：
             #    - 要求与路径有至少100像素的交集
             #    - 要求交集占物体面积的至少1%
@@ -2665,7 +2665,7 @@ class BlindPathNavigator:
             pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img, "RGBA")
             
-            env_scale = float(os.getenv("AIGLASS_PANEL_SCALE", "0.7"))
+            env_scale = float(os.getenv("VISUS_PANEL_SCALE", "0.7"))
             base_font_size = max(10, int(round(14 * env_scale)))
             
             # 尝试多种字体，确保中文显示
@@ -3071,7 +3071,7 @@ class BlindPathNavigator:
             pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img, "RGBA")
             
-            env_scale = float(os.getenv("AIGLASS_PANEL_SCALE", "0.65"))
+            env_scale = float(os.getenv("VISUS_PANEL_SCALE", "0.65"))
             base_font_size = max(8, int(round(16 * env_scale)))
             padding = max(4, int(round(8 * env_scale)))
             

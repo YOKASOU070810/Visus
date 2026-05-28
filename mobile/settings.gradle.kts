@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AIGlass"
+rootProject.name = "Visus"
 include(":app")

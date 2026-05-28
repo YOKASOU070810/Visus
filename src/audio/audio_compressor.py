@@ -445,9 +445,9 @@ class CompressedAudioCache:
 
 # 全局压缩音频缓存实例
 # 默认使用ADPCM压缩，音质更好，压缩率也不错（75%）
-# 可通过环境变量 AIGLASS_COMPRESS_TYPE 设置: none, ulaw, adpcm
+# 可通过环境变量 VISUS_COMPRESS_TYPE 设置: none, ulaw, adpcm
 import os
-compression_type = os.getenv("AIGLASS_COMPRESS_TYPE", "adpcm").lower()
+compression_type = os.getenv("VISUS_COMPRESS_TYPE", "adpcm").lower()
 if compression_type not in ["none", "ulaw", "adpcm"]:
     compression_type = "adpcm"
 compressed_audio_cache = CompressedAudioCache(compression_type=compression_type, use_downsample=False) 

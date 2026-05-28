@@ -28,19 +28,19 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 # 1. 全局设备与并发控制 (统一管理)
 # ==========================================================
-DEVICE = os.getenv("AIGLASS_DEVICE", "cuda:0")
+DEVICE = os.getenv("VISUS_DEVICE", "cuda:0")
 if DEVICE.startswith("cuda") and not torch.cuda.is_available():
-    logger.warning(f"AIGLASS_DEVICE={DEVICE} 但未检测到 CUDA，将回退到 CPU")
+    logger.warning(f"VISUS_DEVICE={DEVICE} 但未检测到 CUDA，将回退到 CPU")
     DEVICE = "cpu"
 IS_CUDA = DEVICE.startswith("cuda")
 
 # AMP (自动混合精度) 配置
-AMP_POLICY = os.getenv("AIGLASS_AMP", "bf16").lower()
+AMP_POLICY = os.getenv("VISUS_AMP", "bf16").lower()
 AMP_DTYPE = torch.bfloat16 if AMP_POLICY == "bf16" else (
     torch.float16 if AMP_POLICY == "fp16" else None) if IS_CUDA else None
 
-# 🔥 核心：全局唯一的GPU并发信号量，所有工作流共享
-GPU_SLOTS = int(os.getenv("AIGLASS_GPU_SLOTS", "2"))
+# 核心：全局唯一的GPU并发信号量，所有工作流共享
+GPU_SLOTS = int(os.getenv("VISUS_GPU_SLOTS", "2"))
 gpu_semaphore = Semaphore(GPU_SLOTS)
 
 

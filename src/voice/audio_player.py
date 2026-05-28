@@ -1,5 +1,5 @@
 # audio_player.py
-# 处理预录音频文件的播放，通过ESP32扬声器输出
+# 处理预录音频文件的播放，通过移动设备扬声器输出
 
 import os
 import wave
@@ -82,7 +82,7 @@ def load_wav_file(filepath):
         return _audio_cache[filepath]
     
     # 使用压缩缓存
-    if os.getenv("AIGLASS_COMPRESS_AUDIO", "1") == "1":
+    if os.getenv("VISUS_COMPRESS_AUDIO", "1") == "1":
         compressed_data = compressed_audio_cache.load_and_compress(filepath)
         if compressed_data:
             # 存储压缩后的数据
@@ -262,7 +262,7 @@ def initialize_audio_system():
     _last_play_ts = 0.0
     
     # 显示压缩统计
-    if os.getenv("AIGLASS_COMPRESS_AUDIO", "1") == "1":
+    if os.getenv("VISUS_COMPRESS_AUDIO", "1") == "1":
         stats = compressed_audio_cache.get_compression_stats()
         print(f"[AUDIO] 音频压缩统计:")
         print(f"  - 文件数: {stats['files_cached']}")
@@ -403,4 +403,4 @@ def play_voice_text(text: str):
     print(f"[AUDIO] 未找到匹配语音: {text}")
 
 # 兼容旧接口
-play_audio_on_esp32 = play_audio_threadsafe
+play_audio_on_mobile = play_audio_threadsafe

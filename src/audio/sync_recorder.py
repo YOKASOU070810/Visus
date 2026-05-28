@@ -1,5 +1,5 @@
 # sync_recorder.py
-# 同步录制ESP32视频流和音频指令
+# 同步录制移动端视频流和音频指令
 # 自动确保视频和音频时间轴对齐
 
 import os
@@ -44,7 +44,7 @@ class SyncRecorder:
         self.audio_buffer = bytearray()
         self.last_audio_time = 0.0
         
-        # 音频参数（ESP32标准：16kHz, 16bit, Mono）
+        # 音频参数（移动端标准：16kHz, 16bit, Mono）
         self.sample_rate = 16000
         self.sample_width = 2  # 16bit = 2 bytes
         self.channels = 1

@@ -177,7 +177,7 @@ YOLO_CORRECTION_IOU_THRESHOLD = 0.2  # IoU阈值，越低越积极矫正
 YOLO_CORRECTION_CONF_THRESHOLD = 0.15  # 置信度阈值，越低检测越敏感
 
 # ========= 方向引导音频路径 =========
-AUDIO_DIR = r"E:\沙粒云\自媒体\2025视频制作\20250925AI眼镜\AI眼镜合并\audio"  # 请修改为实际路径
+AUDIO_DIR = r"audio"  # 音频文件目录，请根据实际路径修改
 AUDIO_FILES = {
     "向上": os.path.join(AUDIO_DIR, "up.wav"),
     "向下": os.path.join(AUDIO_DIR, "down.wav"),
@@ -749,7 +749,7 @@ def main(headless: bool = False, prompt_name: str = None, stop_event=None):
 
     W = None
     H = None
-    print("[Bridge] 等待 ESP32 画面 ...")
+    print("[Bridge] 等待移动设备画面 ...")
 
     # [headless] 仅在非 headless 时创建窗口（原逻辑保留，外层加判断）
     if not headless:
@@ -807,7 +807,7 @@ def main(headless: bool = False, prompt_name: str = None, stop_event=None):
                 
             frame = bridge_io.wait_raw_bgr(timeout_sec=0.5)
             if frame is None:
-                # 没取到帧就继续等（ESP32还没连上或暂时无新帧）
+                # 没取到帧就继续等（移动设备还没连上或暂时无新帧）
                 # [headless] 给出 1ms 让出调度，避免空转
                 if headless:
                     cv2.waitKey(1)

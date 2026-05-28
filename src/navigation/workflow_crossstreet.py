@@ -66,8 +66,8 @@ CROSSWALK_NEAR_MIN_HEIGHT_RATIO = 0.35  # 斑马线高度占画面35%以上（�
 GREEN_LIGHT_STABLE_FRAMES = 5  # 绿灯稳定帧数
 
 # 类别ID绑定（与训练集对应）
-CW_ID = int(os.getenv("AIGLASS_SEG_CW_ID", "0"))  # 斑马线
-BP_ID = int(os.getenv("AIGLASS_SEG_BP_ID", "1"))  # 盲道
+CW_ID = int(os.getenv("VISUS_SEG_CW_ID", "0"))  # 斑马线
+BP_ID = int(os.getenv("VISUS_SEG_BP_ID", "1"))  # 盲道
 
 # 斑马线与盲道的同义名集合
 _CW = {'zebra_crossing', 'zebra crossing', 'zebra', 'crosswalk', 'road_crossing', 'road crossing'}
@@ -202,7 +202,7 @@ def _cls_of(d):
 class CrossStreetNavigator:
     """简化版过马路导航器 - 仅斑马线检测但保留导航（每帧分割 + 失败用光流保活）"""
 
-    def __init__(self, seg_model=None, coco_model=None, obs_model=None, device_id: str = "esp32"):
+    def __init__(self, seg_model=None, coco_model=None, obs_model=None, device_id: str = "mobile"):
         self.seg_model = seg_model
         self.device_id = device_id
         self.frame_counter = 0
@@ -234,20 +234,20 @@ class CrossStreetNavigator:
         self.prev_gray = None
         self.last_detected_obstacles = []
         self.last_obstacle_detection_frame = 0
-        self.OBSTACLE_DETECTION_INTERVAL = int(os.getenv("AIGLASS_OBS_INTERVAL", "15"))
-        self.OBSTACLE_CACHE_DURATION_FRAMES = int(os.getenv("AIGLASS_OBS_CACHE_FRAMES", "0"))
+        self.OBSTACLE_DETECTION_INTERVAL = int(os.getenv("VISUS_OBS_INTERVAL", "15"))
+        self.OBSTACLE_CACHE_DURATION_FRAMES = int(os.getenv("VISUS_OBS_CACHE_FRAMES", "0"))
         
         # 【新增】斑马线检测间隔配置
-        self.CROSSWALK_DETECTION_INTERVAL = int(os.getenv("AIGLASS_CROSSWALK_INTERVAL", "4"))  # 每4帧检测一次
+        self.CROSSWALK_DETECTION_INTERVAL = int(os.getenv("VISUS_CROSSWALK_INTERVAL", "4"))  # 每4帧检测一次
         self.last_crosswalk_detection_frame = 0
         self.last_detected_crosswalk_mask = None
         self.last_detected_blindpath_mask = None
 
         # 自动启用障碍物检测（若未传入 obs_model）
-        if self.obstacle_detector is None and os.getenv("AIGLASS_OBS_AUTO", "1") != "0":
+        if self.obstacle_detector is None and os.getenv("VISUS_OBS_AUTO", "1") != "0":
             try:
                 if ObstacleDetectorClient is not None:
-                    model_path = os.getenv("AIGLASS_OBS_MODEL", "model/yoloe-11l-seg.pt")
+                    model_path = os.getenv("VISUS_OBS_MODEL", "model/yoloe-11l-seg.pt")
                     self.obstacle_detector = ObstacleDetectorClient(model_path)
                     logger.info("[CROSS_STREET] 障碍物检测器已自动加载")
                 else:
@@ -1011,7 +1011,7 @@ class CrossStreetNavigator:
         try:
             pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img, "RGBA")
-            env_scale = float(os.getenv("AIGLASS_PANEL_SCALE", "0.7"))
+            env_scale = float(os.getenv("VISUS_PANEL_SCALE", "0.7"))
             base_font_size = max(10, int(round(14 * env_scale)))
             font = None
             font_paths = [

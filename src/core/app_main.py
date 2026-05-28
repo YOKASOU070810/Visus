@@ -121,10 +121,6 @@ from audio import sync_recorder
 import signal
 import atexit
 
-# ---- IMU UDP ----
-UDP_IP   = "0.0.0.0"
-UDP_PORT = 12345
-
 app = FastAPI()
 
 # ====== 状态与容器 ======
@@ -142,9 +138,8 @@ VISUAL_TRIGGER_WORDS = (
 CAMERA_DISPLAY_ROTATE_DEG = int(os.getenv("CAMERA_DISPLAY_ROTATE_DEG", "90"))
 
 camera_viewers: Set[WebSocket] = set()
-esp32_camera_ws: Optional[WebSocket] = None
-imu_ws_clients: Set[WebSocket] = set()
-esp32_audio_ws: Optional[WebSocket] = None
+mobile_camera_ws: Optional[WebSocket] = None
+mobile_audio_ws: Optional[WebSocket] = None
 
 # 【新增】盲道导航相关全局变量
 blind_path_navigator = None
@@ -418,7 +413,7 @@ async def full_system_reset(reason: str = ""):
     2) 停止 ASR 实时识别流（关键）
     3) 清 UI 状态
     4) 清最近相机帧（避免把旧帧又拼进下一轮）
-    5) 告知 ESP32：RESET（可选）
+    5) 通知移动端：RESET（可选）
     """
     # 1) 音频&AI
     await hard_reset_audio(reason or "full_system_reset")
@@ -435,13 +430,6 @@ async def full_system_reset(reason: str = ""):
     # 4) 相机帧
     try:
         last_frames.clear()
-    except Exception:
-        pass
-
-    # 5) 通知 ESP32
-    try:
-        if esp32_audio_ws and (esp32_audio_ws.client_state == WebSocketState.CONNECTED):
-            await esp32_audio_ws.send_text("RESET")
     except Exception:
         pass
 
@@ -920,11 +908,11 @@ async def ws_ui(ws: WebSocket):
     finally:
         ui_clients.pop(id(ws), None)
 
-# ---------- WebSocket：ESP32 音频入口（ASR 上行） ----------
+# ---------- WebSocket：移动端音频入口（ASR 上行） ----------
 @app.websocket("/ws_audio")
 async def ws_audio(ws: WebSocket):
-    global esp32_audio_ws
-    esp32_audio_ws = ws
+    global mobile_audio_ws
+    mobile_audio_ws = ws
     await ws.accept()
     print("\n[AUDIO] client connected")
     recognition = None
@@ -1180,7 +1168,7 @@ async def ws_audio(ws: WebSocket):
                     await ui_broadcast_status("idle")
 
                 elif raw.startswith("PROMPT:"):
-                    # 设备端主动发起一轮：同样使用“先硬重置后播放”的强语义
+                    # 移动端主动发起一轮：同样使用“先硬重置后播放”的强语义
                     text = raw[len("PROMPT:"):].strip()
                     if text:
                         async with interrupt_lock:
@@ -1210,21 +1198,21 @@ async def ws_audio(ws: WebSocket):
                 await ws.close(code=1000)
         except Exception:
             pass
-        if esp32_audio_ws is ws:
-            esp32_audio_ws = None
+        if mobile_audio_ws is ws:
+            mobile_audio_ws = None
         print("[WS] connection closed")
 
-# ---------- WebSocket：ESP32 相机入口（JPEG 二进制） ----------
+# ---------- WebSocket：移动端相机入口（JPEG 二进制） ----------
 @app.websocket("/ws/camera")
-async def ws_camera_esp(ws: WebSocket):
-    global esp32_camera_ws, blind_path_navigator, cross_street_navigator, cross_street_active, navigation_active, orchestrator
-    if esp32_camera_ws is not None:
+async def ws_camera_mobile(ws: WebSocket):
+    global mobile_camera_ws, blind_path_navigator, cross_street_navigator, cross_street_active, navigation_active, orchestrator
+    if mobile_camera_ws is not None:
         try:
-            await esp32_camera_ws.close(code=1001, reason="new client")
+            await mobile_camera_ws.close(code=1001, reason="new client")
         except Exception:
             pass
-        esp32_camera_ws = None
-    esp32_camera_ws = ws
+        mobile_camera_ws = None
+    mobile_camera_ws = ws
     await ws.accept()
     print("[CAMERA] client connected")
     
@@ -1400,8 +1388,8 @@ async def ws_camera_esp(ws: WebSocket):
                 await ws.close(code=1000)
         except Exception:
             pass
-        esp32_camera_ws = None
-        print("[CAMERA] ESP32 disconnected")
+        mobile_camera_ws = None
+        print("[CAMERA] Mobile client disconnected")
         
         # 【新增】清理导航状态
         if blind_path_navigator:
@@ -1430,160 +1418,6 @@ async def ws_viewer(ws: WebSocket):
         except Exception: 
             pass
         print(f"[VIEWER] Removed. Total viewers: {len(camera_viewers)}", flush=True)
-
-# ---------- WebSocket：浏览器订阅 IMU ----------
-@app.websocket("/ws")
-async def ws_imu(ws: WebSocket):
-    await ws.accept()
-    imu_ws_clients.add(ws)
-    try:
-        while True:
-            await asyncio.sleep(60)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        imu_ws_clients.discard(ws)
-
-async def imu_broadcast(msg: str):
-    if not imu_ws_clients: return
-    dead = []
-    for ws in list(imu_ws_clients):
-        try:
-            await ws.send_text(msg)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        imu_ws_clients.discard(ws)
-
-# ---------- 服务端 IMU 估计（原样保留） ----------
-from math import atan2, hypot, pi
-GRAV_BETA   = 0.98
-STILL_W     = 0.4
-YAW_DB      = 0.08
-YAW_LEAK    = 0.2
-ANG_EMA     = 0.15
-AUTO_REZERO = True
-USE_PROJ    = True
-FREEZE_STILL= True
-G     = 9.807
-A_TOL = 0.08 * G
-gLP = {"x":0.0, "y":0.0, "z":0.0}
-gOff= {"x":0.0, "y":0.0, "z":0.0}
-BIAS_ALPHA = 0.002
-yaw  = 0.0
-Rf = Pf = Yf = 0.0
-ref = {"roll":0.0, "pitch":0.0, "yaw":0.0}
-holdStart = 0.0
-isStill   = False
-last_ts_imu = 0.0
-last_wall = 0.0
-imu_store: List[Dict[str, Any]] = []
-
-def _wrap180(a: float) -> float:
-    a = a % 360.0
-    if a >= 180.0: a -= 360.0
-    if a < -180.0: a += 360.0
-    return a
-
-def process_imu_and_maybe_store(d: Dict[str, Any]):
-    global gLP, gOff, yaw, Rf, Pf, Yf, ref, holdStart, isStill, last_ts_imu, last_wall
-
-    t_ms = float(d.get("ts", 0.0))
-    now_wall = time.monotonic()
-    if t_ms <= 0.0:
-        t_ms = (now_wall * 1000.0)
-    if last_ts_imu <= 0.0 or t_ms <= last_ts_imu or (t_ms - last_ts_imu) > 3000.0:
-        dt = 0.02
-    else:
-        dt = (t_ms - last_ts_imu) / 1000.0
-    last_ts_imu = t_ms
-
-    ax = float(((d.get("accel") or {}).get("x", 0.0)))
-    ay = float(((d.get("accel") or {}).get("y", 0.0)))
-    az = float(((d.get("accel") or {}).get("z", 0.0)))
-    wx = float(((d.get("gyro")  or {}).get("x", 0.0)))
-    wy = float(((d.get("gyro")  or {}).get("y", 0.0)))
-    wz = float(((d.get("gyro")  or {}).get("z", 0.0)))
-
-    gLP["x"] = GRAV_BETA * gLP["x"] + (1.0 - GRAV_BETA) * ax
-    gLP["y"] = GRAV_BETA * gLP["y"] + (1.0 - GRAV_BETA) * ay
-    gLP["z"] = GRAV_BETA * gLP["z"] + (1.0 - GRAV_BETA) * az
-    gmag = hypot(gLP["x"], gLP["y"], gLP["z"]) or 1.0
-    gHat = {"x": gLP["x"]/gmag, "y": gLP["y"]/gmag, "z": gLP["z"]/gmag}
-
-    roll  = (atan2(az, ay)   * 180.0 / pi)
-    pitch = (atan2(-ax, ay)  * 180.0 / pi)
-
-    aNorm = hypot(ax, ay, az); wNorm = hypot(wx, wy, wz)
-    nearFlat = (abs(roll) < 2.0 and abs(pitch) < 2.0)
-    stillCond = (abs(aNorm - G) < A_TOL) and (wNorm < STILL_W)
-
-    if stillCond:
-        if holdStart <= 0.0: holdStart = t_ms
-        if not isStill and (t_ms - holdStart) > 350.0: isStill = True
-        gOff["x"] = (1.0 - BIAS_ALPHA)*gOff["x"] + BIAS_ALPHA*wx
-        gOff["y"] = (1.0 - BIAS_ALPHA)*gOff["y"] + BIAS_ALPHA*wy
-        gOff["z"] = (1.0 - BIAS_ALPHA)*gOff["z"] + BIAS_ALPHA*wz
-    else:
-        holdStart = 0.0; isStill = False
-
-    if USE_PROJ:
-        yawdot = ((wx - gOff["x"])*gHat["x"] + (wy - gOff["y"])*gHat["y"] + (wz - gOff["z"])*gHat["z"])
-    else:
-        yawdot = (wy - gOff["y"])
-
-    if abs(yawdot) < YAW_DB: yawdot = 0.0
-    if FREEZE_STILL and stillCond: yawdot = 0.0
-
-    yaw = _wrap180(yaw + yawdot * dt)
-
-    if (YAW_LEAK > 0.0) and nearFlat and stillCond and abs(yaw) > 0.0:
-        step = YAW_LEAK * dt * (-1.0 if yaw > 0 else (1.0 if yaw < 0 else 0.0))
-        if abs(yaw) <= abs(step): yaw = 0.0
-        else: yaw += step
-
-    global Rf, Pf, Yf, ref, last_wall
-    Rf = ANG_EMA * roll  + (1.0 - ANG_EMA) * Rf
-    Pf = ANG_EMA * pitch + (1.0 - ANG_EMA) * Pf
-    Yf = ANG_EMA * yaw   + (1.0 - ANG_EMA) * Yf
-
-    if AUTO_REZERO and nearFlat and (wNorm < STILL_W):
-        if holdStart <= 0.0: holdStart = t_ms
-        if not isStill and (t_ms - holdStart) > 350.0:
-            ref.update({"roll": Rf, "pitch": Pf, "yaw": Yf})
-            isStill = True
-
-    R = _wrap180(Rf - ref["roll"])
-    P = _wrap180(Pf - ref["pitch"])
-    Y = _wrap180(Yf - ref["yaw"])
-
-    now_wall = time.monotonic()
-    if last_wall <= 0.0 or (now_wall - last_wall) >= 0.100:
-        last_wall = now_wall
-        item = {
-            "ts": t_ms/1000.0,
-            "angles": {"roll": R, "pitch": P, "yaw": Y},
-            "accel":  {"x": ax, "y": ay, "z": az},
-            "gyro":   {"x": wx, "y": wy, "z": wz},
-        }
-        imu_store.append(item)
-
-# ---------- UDP 接收 IMU 并转发 ----------
-class UDPProto(asyncio.DatagramProtocol):
-    def connection_made(self, transport):
-        print(f"[UDP] listening on {UDP_IP}:{UDP_PORT}")
-    def datagram_received(self, data, addr):
-        try:
-            s = data.decode('utf-8', errors='ignore').strip()
-            d = json.loads(s)
-            if 'ts' not in d and 'timestamp_ms' in d:
-                d['ts'] = d.pop('timestamp_ms')
-            process_imu_and_maybe_store(d)
-            asyncio.create_task(imu_broadcast(json.dumps(d)))
-        except Exception:
-            pass
-
-
 
 # === 新增：注册给 bridge_io 的发送回调（把 JPEG 广播给 /ws/viewer） ===
 @app.on_event("startup")
@@ -1641,11 +1475,6 @@ async def on_startup_init_audio():
     
     threading.Thread(target=_init, daemon=True).start()
 
-@app.on_event("startup")
-async def on_startup():
-    loop = asyncio.get_running_loop()
-    await loop.create_datagram_endpoint(lambda: UDPProto(), local_addr=(UDP_IP, UDP_PORT))
-
 @app.on_event("shutdown")
 async def on_shutdown():
     """应用关闭时的清理工作"""
@@ -1659,15 +1488,13 @@ async def on_shutdown():
     
     print("[SHUTDOWN] 资源清理完成")
 
-# app_main.py —— 在文件里已有的 @app.on_event("startup") 之后，再加一个新的 startup 钩子
-
 
 # --- 导出接口（可选） ---
 def get_last_frames():
     return last_frames
 
 def get_camera_ws():
-    return esp32_camera_ws
+    return mobile_camera_ws
 
 if __name__ == "__main__":
     uvicorn.run(

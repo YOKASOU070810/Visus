@@ -12,19 +12,19 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 # --- GPU/CPU & AMP 配置 (从 blindpath 工作流迁移而来，保持一致) ---
-DEVICE = os.getenv("AIGLASS_DEVICE", "cuda:0")
+DEVICE = os.getenv("VISUS_DEVICE", "cuda:0")
 if DEVICE.startswith("cuda") and not torch.cuda.is_available():
-    logger.warning(f"AIGLASS_DEVICE={DEVICE} 但未检测到 CUDA，将回退到 CPU")
+    logger.warning(f"VISUS_DEVICE={DEVICE} 但未检测到 CUDA，将回退到 CPU")
     DEVICE = "cpu"
 IS_CUDA = DEVICE.startswith("cuda")
 
-AMP_POLICY = os.getenv("AIGLASS_AMP", "bf16").lower()
+AMP_POLICY = os.getenv("VISUS_AMP", "bf16").lower()
 if AMP_POLICY not in ("bf16", "fp16", "off"):
     AMP_POLICY = "bf16"
 AMP_DTYPE = torch.bfloat16 if AMP_POLICY == "bf16" else (torch.float16 if AMP_POLICY == "fp16" else None)
 
 # --- GPU 并发限流 (从 blindpath 工作流迁移而来，保持一致) ---
-GPU_SLOTS = int(os.getenv("AIGLASS_GPU_SLOTS", "2"))
+GPU_SLOTS = int(os.getenv("VISUS_GPU_SLOTS", "2"))
 _gpu_slots = Semaphore(GPU_SLOTS)
 
 try:
@@ -106,7 +106,7 @@ class ObstacleDetectorClient:
             logger.error(f"设置 YOLOE 提示词失败: {e}")
             return []
 
-        conf_thr = float(os.getenv("AIGLASS_OBS_CONF", "0.25"))
+        conf_thr = float(os.getenv("VISUS_OBS_CONF", "0.25"))
         with gpu_infer_slot():
             results = self.model.predict(image, verbose=False, conf=conf_thr)
 
