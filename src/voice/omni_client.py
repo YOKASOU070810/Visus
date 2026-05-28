@@ -4,6 +4,7 @@ import os, base64
 from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 
 from openai import OpenAI
+from utils.system_prompt import load_builtin_system_prompt
 
 # ===== OpenAI 兼容（达摩院 DashScope 兼容模式）=====
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
@@ -12,6 +13,13 @@ if not API_KEY:
 
 QWEN_MODEL = os.getenv("QWEN_OMNI_MODEL", "qwen-omni-turbo")
 QWEN_TEXT_MODEL = os.getenv("QWEN_TEXT_MODEL", "qwen-plus")
+BUILTIN_SYSTEM_PROMPT = load_builtin_system_prompt()
+VOICE_REPLY_RULES = (
+    "\n\n补充语音播报规则："
+    "除危险预警或复杂导航外，通常用 1 到 3 句回答；"
+    "先回应用户当前问题，再结合画面给出必要的出行辅助；"
+    "如果用户只是打招呼，要友好回应，并提示可以帮忙看路、找物品、读文字或描述周围。"
+)
 
 # 兼容模式
 oai_client = OpenAI(
@@ -73,14 +81,7 @@ async def stream_chat(
     - 以 stream=True 返回
     - 增量产出：OmniStreamPiece(text_delta=?, audio_b64=?)
     """
-    system_prompt = (
-        "你是 Visus/AIGlass 的中文语音助手，服务对象是视障或出行中的用户。"
-        "先直接回应用户的话，再在需要时结合画面给出有用信息。"
-        "语气自然、聪明、像真人助手，不要反复说没听清。"
-        "回答适合语音播报：通常 1 到 3 句，必要时可以问一个简短追问。"
-        "如果用户只是打招呼，要友好回应并提示可以问路、找物品、描述画面或闲聊。"
-        "不要编造你没有把握的环境细节。"
-    )
+    system_prompt = BUILTIN_SYSTEM_PROMPT + VOICE_REPLY_RULES
     request_kwargs: Dict[str, Any] = {
         "model": QWEN_MODEL,
         "messages": [
