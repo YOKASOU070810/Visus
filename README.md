@@ -64,8 +64,8 @@ Visus-main/
 - **多模态反馈**：视觉标注 + 语音引导 + 居中提示
 
 ### 🎙️ 实时语音交互
-- **语音识别（ASR）**：基于阿里云 DashScope Paraformer 实时语音识别
-- **多模态对话**：Qwen-Omni-Turbo 支持图像+文本输入，语音输出
+- **语音识别（ASR）**：当前基于 DashScope Paraformer 实时语音识别
+- **多模态对话**：基于火山引擎方舟豆包模型，支持文本和图像输入
 - **智能指令解析**：自动识别导航、查找、对话等不同类型指令
 - **上下文感知**：在不同模式下智能过滤无关指令
 
@@ -105,9 +105,12 @@ Visus-main/
 - **浏览器**: Chrome 90+, Firefox 88+, Edge 90+（用于 Web 监控）
 
 ### API 密钥
-- **阿里云 DashScope API Key**（必需）：
-  - 用于语音识别（ASR）和 Qwen-Omni 对话
-  - 申请地址：https://dashscope.console.aliyun.com/
+- **火山引擎方舟 API Key**（必需）：
+  - 用于豆包大模型对话、图像理解和物品名称归一化
+  - 需要配置方舟推理接入点 ID（`ARK_MODEL` / `DOUBAO_MODEL`）
+- **阿里云 DashScope API Key**（当前仍必需）：
+  - 仅用于实时语音识别（ASR）
+  - 如果后续接入火山实时 ASR，可以移除此项
 
 ---
 
@@ -170,17 +173,28 @@ pip install torch torchvision
 
 ```bash
 # .env
-DASHSCOPE_API_KEY=sk-your-api-key-here
+ARK_API_KEY=your-volcengine-ark-api-key
+ARK_MODEL=your-ark-endpoint-id
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+
+# 当前实时 ASR 仍使用 DashScope
+DASHSCOPE_API_KEY=sk-your-dashscope-key-here
 ```
 
 或在启动前设置环境变量：
 
 ```bash
 # Windows PowerShell
-$env:DASHSCOPE_API_KEY="sk-your-api-key-here"
+$env:ARK_API_KEY="your-volcengine-ark-api-key"
+$env:ARK_MODEL="your-ark-endpoint-id"
+$env:ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+$env:DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
 
 # Linux/macOS
-export DASHSCOPE_API_KEY="sk-your-api-key-here"
+export ARK_API_KEY="your-volcengine-ark-api-key"
+export ARK_MODEL="your-ark-endpoint-id"
+export ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+export DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
 ```
 
 #### 6. 启动服务器

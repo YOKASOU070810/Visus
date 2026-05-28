@@ -30,6 +30,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.Surface
 import androidx.core.app.NotificationCompat
@@ -45,6 +46,7 @@ import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.net.URI
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class StreamingService : Service() {
@@ -83,6 +85,7 @@ class StreamingService : Service() {
     private var audioWebSocket: WebSocketClient? = null
     private var uiWebSocket: WebSocketClient? = null
     private var settingsDataStore: SettingsDataStore? = null
+    private var textToSpeech: TextToSpeech? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): StreamingService = this@StreamingService
@@ -92,6 +95,11 @@ class StreamingService : Service() {
         super.onCreate()
         settingsDataStore = SettingsDataStore(this)
         createNotificationChannel()
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech?.language = Locale.CHINESE
+            }
+        }
     }
 
     override fun onBind(intent: Intent): IBinder {
@@ -107,6 +115,9 @@ class StreamingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopStreaming()
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
         serviceScope.cancel()
     }
 
@@ -261,8 +272,10 @@ class StreamingService : Service() {
             "ai_reply" -> {
                 val text = Regex("\"text\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.getOrNull(1)
                 if (!text.isNullOrBlank()) {
-                    StreamingUiState.addFinalMessage("[AI] ${unescapeJsonText(text)}")
+                    val reply = unescapeJsonText(text)
+                    StreamingUiState.addFinalMessage("[AI] $reply")
                     StreamingUiState.setPartialText("等待语音输入")
+                    speakText(reply)
                 }
             }
             "status" -> {
@@ -287,6 +300,11 @@ class StreamingService : Service() {
             .replace("\\n", "\n")
             .replace("\\\"", "\"")
             .replace("\\\\", "\\")
+    }
+
+    private fun speakText(text: String) {
+        if (text.isBlank()) return
+        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "visus_ai_reply")
     }
 
     private fun parseInitialState(json: String) {

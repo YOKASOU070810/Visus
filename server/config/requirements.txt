@@ -24,9 +24,10 @@ pyaudio==0.2.14
 pydub==0.25.1
 pygame==2.5.2
 
-# Aliyun DashScope SDK (ASR & Qwen-Omni)
-dashscope==1.14.1
-openai==1.3.5  # For DashScope compatibility mode
+# Speech Recognition + Volcengine Ark/OpenAI-compatible LLM
+dashscope==1.14.1  # Realtime ASR only
+openai==1.3.5  # For Volcengine Ark OpenAI-compatible chat completions
+httpx==0.27.2  # Compatible with openai==1.3.5
 
 # Environment & Configuration
 python-dotenv==1.0.0

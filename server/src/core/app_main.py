@@ -21,7 +21,7 @@ from collections import deque
 from dataclasses import dataclass
 import re
 # 在其它 import 之后加：
-from voice.qwen_extractor import extract_english_label
+from voice.doubao_extractor import extract_english_label
 
 # 重型 ML 依赖——缺失时降级运行
 try:
@@ -76,15 +76,15 @@ try:
 except Exception:
     pass
 
-# ---- DashScope ASR 基础 ----
+# ---- DashScope ASR 基础（仅语音识别；大模型回复已切换到豆包方舟）----
 from dashscope import audio as dash_audio  # 若未安装，会在原项目里抛错提示
 
-API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-if not API_KEY:
+ASR_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+if not ASR_API_KEY:
     raise RuntimeError("未设置 DASHSCOPE_API_KEY")
 print(
-    f"[ASR] DASHSCOPE_API_KEY loaded={bool(API_KEY)}, "
-    f"prefix={API_KEY[:3]}..., suffix={API_KEY[-4:] if len(API_KEY) >= 4 else '****'}",
+    f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
+    f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
     flush=True
 )
 
@@ -628,7 +628,7 @@ async def start_ai_with_text_custom(user_text: str):
         # 提取中文物品名称
         item_cn = match.group(1).strip()
         if item_cn:
-            # 【新增】用本地映射 + Qwen 提取英文类名
+            # 【新增】用本地映射 + 豆包提取英文类名
             label_en, src = extract_english_label(item_cn)
             print(f"[COMMAND] Finder request: '{item_cn}' -> '{label_en}' (src={src})", flush=True)
 
@@ -718,7 +718,7 @@ async def start_ai_with_text(user_text: str):
                     frames, rate_state = audioop.ratecv(frames, sampwidth, 1, framerate, 8000, rate_state)
                 return audioop.mul(frames, 2, 0.60), rate_state
 
-            # DashScope Omni streaming audio chunks are usually raw PCM16 at 24 kHz.
+            # Some multimodal providers return raw PCM16 at 24 kHz.
             pcm8k, rate_state = audioop.ratecv(audio_bytes, 2, 1, 24000, 8000, rate_state)
             return audioop.mul(pcm8k, 2, 0.60), rate_state
         except Exception as e:
@@ -1127,15 +1127,15 @@ async def ws_audio(ws: WebSocket):
 
                     try:
                         print(
-                            f"[ASR] DASHSCOPE_API_KEY loaded={bool(API_KEY)}, "
-                            f"prefix={API_KEY[:3]}..., suffix={API_KEY[-4:] if len(API_KEY) >= 4 else '****'}",
+                            f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
+                            f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
                             flush=True
                         )
-                        if not API_KEY:
+                        if not ASR_API_KEY:
                             raise RuntimeError("DASHSCOPE_API_KEY is empty")
                         print("[ASR] creating recognition...", flush=True)
                         recognition = dash_audio.asr.Recognition(
-                            api_key=API_KEY, model=MODEL, format=AUDIO_FMT,
+                            api_key=ASR_API_KEY, model=MODEL, format=AUDIO_FMT,
                             sample_rate=SAMPLE_RATE, callback=cb
                         )
                         print("[ASR] recognition.start() calling...", flush=True)

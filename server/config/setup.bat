@@ -102,7 +102,7 @@ if not exist .env (
     echo 正在创建 .env 配置文件...
     copy .env.example .env >nul
     echo [成功] .env 文件已创建
-    echo [提示] 请编辑 .env 文件，填入您的 DASHSCOPE_API_KEY
+    echo [提示] 请编辑 .env 文件，填入您的 ARK_API_KEY、ARK_MODEL 和 DASHSCOPE_API_KEY
 ) else (
     echo [跳过] .env 文件已存在
 )
@@ -138,7 +138,7 @@ echo [成功] 安装完成!
 echo ==========================================
 echo.
 echo 下一步:
-echo 1. 编辑 .env 文件，填入您的 API 密钥:
+echo 1. 编辑 .env 文件，填入您的 API 配置:
 echo    notepad .env
 echo.
 echo 2. 确保所有模型文件已放入 model\ 目录

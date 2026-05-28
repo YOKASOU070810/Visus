@@ -131,7 +131,7 @@ if [ ! -f ".env" ]; then
     echo "正在创建 .env 配置文件..."
     cp .env.example .env
     echo -e "${GREEN}✓ .env 文件已创建${NC}"
-    echo -e "${YELLOW}请编辑 .env 文件，填入您的 DASHSCOPE_API_KEY${NC}"
+    echo -e "${YELLOW}请编辑 .env 文件，填入您的 ARK_API_KEY、ARK_MODEL 和 DASHSCOPE_API_KEY${NC}"
 else
     echo -e "${YELLOW}.env 文件已存在，跳过${NC}"
 fi
