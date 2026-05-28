@@ -788,7 +788,7 @@ async def start_ai_with_text(user_text: str):
         content_list = [{
             "type": "text",
             "text": (
-                "你是 Visus 语音助手。普通对话请用 1-2 句中文简短回答，适合语音播报。"
+                "以下是用户当前语音请求。请遵循系统提示词，为视力障碍用户提供出行辅助，回答适合语音播报。"
             )
         }]
         attach_image = should_attach_image(user_text)
