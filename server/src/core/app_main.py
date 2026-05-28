@@ -115,6 +115,7 @@ from voice.asr_core import (
     stop_current_recognition,
 )
 from voice.audio_player import initialize_audio_system, play_voice_text
+from voice.doubao_tts import synthesize_to_pcm8k
 
 # ---- 同步录制器 ----
 from audio import sync_recorder
@@ -122,6 +123,8 @@ import signal
 import atexit
 
 app = FastAPI()
+
+AI_MIC_SUPPRESS_TAIL_SEC = float(os.getenv("AI_MIC_SUPPRESS_TAIL_SEC", "1.8"))
 
 # ====== 状态与容器 ======
 app.mount("/static", StaticFiles(directory="../web/static"), name="static")
@@ -868,11 +871,27 @@ async def start_ai_with_text(user_text: str):
                 pass
 
             final_text = ("".join(txt_buf)).strip() or fallback_reply
+            ai_speaking_until = 0.0
+            if final_text and not audio_sent:
+                try:
+                    tts_start_ts = time.perf_counter()
+                    tts_pcm = await asyncio.to_thread(synthesize_to_pcm8k, final_text)
+                    if tts_pcm:
+                        audio_sent = True
+                        duration_sec = len(tts_pcm) / (8000 * 2)
+                        ai_speaking_until = time.monotonic() + duration_sec + AI_MIC_SUPPRESS_TAIL_SEC
+                        await ui_broadcast_status("speaking")
+                        await broadcast_pcm16_realtime(tts_pcm)
+                        print(f"[PERF] doubao_tts_time={(time.perf_counter() - tts_start_ts) * 1000:.1f} ms", flush=True)
+                except Exception as e:
+                    print(f"[DOUBAO TTS] playback failed: {repr(e)}", flush=True)
             try:
                 from voice.audio_stream import stream_clients
                 has_audio_client = any(not sc.abort_event.is_set() for sc in list(stream_clients))
                 await ui_broadcast_ai_reply(final_text, tts_fallback=(not audio_sent or not has_audio_client))
                 await ui_broadcast_final("[AI] " + final_text)
+                if ai_speaking_until > time.monotonic():
+                    await asyncio.sleep(ai_speaking_until - time.monotonic())
                 await ui_broadcast_status("idle")
             except Exception as e:
                 print(f"[AI UI ERROR] failed to broadcast final reply: {repr(e)}", flush=True)
@@ -1185,6 +1204,10 @@ async def ws_audio(ws: WebSocket):
             elif "bytes" in msg and msg["bytes"] is not None:
                 audio_chunk_count += 1
                 data = msg["bytes"]
+                if is_playing_now():
+                    if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
+                        print("[AUDIO] dropping mic chunk while AI is speaking", flush=True)
+                    continue
                 if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
                     print(f"[AUDIO] chunk #{audio_chunk_count}: size={len(data)} bytes, streaming={streaming}", flush=True)
                 if streaming and recognition:

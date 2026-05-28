@@ -59,6 +59,8 @@ class StreamingService : Service() {
         private const val CAMERA_HEIGHT = 480
         private const val CAMERA_SEND_INTERVAL_MS = 100L
         private const val CAMERA_PREVIEW_ROTATE_DEG = 90f
+        private const val MIC_RESUME_DELAY_MS = 1800L
+        private const val PLAYBACK_BUFFER_MS = 1500
         private const val AUDIO_SAMPLE_RATE = 16000
         private const val AUDIO_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -79,7 +81,9 @@ class StreamingService : Service() {
     private var audioRecord: AudioRecord? = null
     private var audioJob: Job? = null
     private var playbackJob: Job? = null
+    private var micResumeJob: Job? = null
     private var audioTrack: AudioTrack? = null
+    private val suppressMicUpload = AtomicBoolean(false)
 
     private var cameraWebSocket: WebSocketClient? = null
     private var audioWebSocket: WebSocketClient? = null
@@ -275,7 +279,10 @@ class StreamingService : Service() {
                     val reply = unescapeJsonText(text)
                     StreamingUiState.addFinalMessage("[AI] $reply")
                     StreamingUiState.setPartialText("等待语音输入")
-                    speakText(reply)
+                    val shouldUseLocalTts = Regex("\"tts_fallback\"\\s*:\\s*true").containsMatchIn(json)
+                    if (shouldUseLocalTts) {
+                        speakText(reply)
+                    }
                 }
             }
             "status" -> {
@@ -285,8 +292,15 @@ class StreamingService : Service() {
                         when (stage) {
                             "listening" -> "正在听"
                             "thinking" -> "AI 思考中"
-                            "speaking" -> "AI 回复中"
-                            "idle" -> "推流中"
+                            "speaking" -> {
+                                micResumeJob?.cancel()
+                                suppressMicUpload.set(true)
+                                "AI 回复中"
+                            }
+                            "idle" -> {
+                                scheduleMicResume()
+                                "推流中"
+                            }
                             else -> stage
                         }
                     )
@@ -304,7 +318,18 @@ class StreamingService : Service() {
 
     private fun speakText(text: String) {
         if (text.isBlank()) return
+        micResumeJob?.cancel()
+        suppressMicUpload.set(true)
         textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "visus_ai_reply")
+        scheduleMicResume(3000L)
+    }
+
+    private fun scheduleMicResume(delayMs: Long = MIC_RESUME_DELAY_MS) {
+        micResumeJob?.cancel()
+        micResumeJob = serviceScope.launch {
+            delay(delayMs)
+            suppressMicUpload.set(false)
+        }
     }
 
     private fun parseInitialState(json: String) {
@@ -454,7 +479,7 @@ class StreamingService : Service() {
             val buffer = ByteArray(AUDIO_BUFFER_SIZE)
             while (isActive && isStreaming.get()) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0) {
+                if (read > 0 && !suppressMicUpload.get()) {
                     sendAudioData(buffer.copyOf(read))
                 }
             }
@@ -462,6 +487,9 @@ class StreamingService : Service() {
     }
 
     private fun stopAudioCapture() {
+        micResumeJob?.cancel()
+        micResumeJob = null
+        suppressMicUpload.set(false)
         audioJob?.cancel()
         audioJob = null
         audioRecord?.stop()
@@ -480,6 +508,8 @@ class StreamingService : Service() {
             AudioFormat.ENCODING_PCM_16BIT
         )
 
+        val playbackBufferBytes = maxOf(minBufferSize, 8000 * 2 * PLAYBACK_BUFFER_MS / 1000)
+
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -494,7 +524,7 @@ class StreamingService : Service() {
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBufferSize, 6400))
+            .setBufferSizeInBytes(playbackBufferBytes)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 

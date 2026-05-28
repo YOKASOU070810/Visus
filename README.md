@@ -108,6 +108,9 @@ Visus-main/
 - **火山引擎方舟 API Key**（必需）：
   - 用于豆包大模型对话、图像理解和物品名称归一化
   - 需要配置方舟推理接入点 ID（`ARK_MODEL` / `DOUBAO_MODEL`）
+- **火山引擎语音合成配置**（必需）：
+  - 用于把豆包文本回复合成为手机端可播放的语音
+  - 需要配置 `VOLCENGINE_TTS_APP_ID`、`VOLCENGINE_TTS_ACCESS_TOKEN`、`VOLCENGINE_TTS_CLUSTER`、`VOLCENGINE_TTS_VOICE_TYPE`
 - **阿里云 DashScope API Key**（当前仍必需）：
   - 仅用于实时语音识别（ASR）
   - 如果后续接入火山实时 ASR，可以移除此项
@@ -177,6 +180,12 @@ ARK_API_KEY=your-volcengine-ark-api-key
 ARK_MODEL=your-ark-endpoint-id
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 
+VOLCENGINE_TTS_APP_ID=your-volcengine-tts-app-id
+VOLCENGINE_TTS_ACCESS_TOKEN=your-volcengine-tts-access-token
+VOLCENGINE_TTS_CLUSTER=volcano_tts
+VOLCENGINE_TTS_VOICE_TYPE=BV700_V2_streaming
+VOLCENGINE_TTS_ENCODING=wav
+
 # 当前实时 ASR 仍使用 DashScope
 DASHSCOPE_API_KEY=sk-your-dashscope-key-here
 ```
@@ -188,12 +197,20 @@ DASHSCOPE_API_KEY=sk-your-dashscope-key-here
 $env:ARK_API_KEY="your-volcengine-ark-api-key"
 $env:ARK_MODEL="your-ark-endpoint-id"
 $env:ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+$env:VOLCENGINE_TTS_APP_ID="your-volcengine-tts-app-id"
+$env:VOLCENGINE_TTS_ACCESS_TOKEN="your-volcengine-tts-access-token"
+$env:VOLCENGINE_TTS_CLUSTER="volcano_tts"
+$env:VOLCENGINE_TTS_VOICE_TYPE="BV700_V2_streaming"
 $env:DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
 
 # Linux/macOS
 export ARK_API_KEY="your-volcengine-ark-api-key"
 export ARK_MODEL="your-ark-endpoint-id"
 export ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+export VOLCENGINE_TTS_APP_ID="your-volcengine-tts-app-id"
+export VOLCENGINE_TTS_ACCESS_TOKEN="your-volcengine-tts-access-token"
+export VOLCENGINE_TTS_CLUSTER="volcano_tts"
+export VOLCENGINE_TTS_VOICE_TYPE="BV700_V2_streaming"
 export DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
 ```
 

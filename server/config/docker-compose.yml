@@ -18,6 +18,11 @@ services:
       - ARK_API_KEY=${ARK_API_KEY}
       - ARK_MODEL=${ARK_MODEL}
       - ARK_BASE_URL=${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      - VOLCENGINE_TTS_APP_ID=${VOLCENGINE_TTS_APP_ID}
+      - VOLCENGINE_TTS_ACCESS_TOKEN=${VOLCENGINE_TTS_ACCESS_TOKEN}
+      - VOLCENGINE_TTS_CLUSTER=${VOLCENGINE_TTS_CLUSTER:-volcano_tts}
+      - VOLCENGINE_TTS_VOICE_TYPE=${VOLCENGINE_TTS_VOICE_TYPE:-BV700_V2_streaming}
+      - VOLCENGINE_TTS_ENCODING=${VOLCENGINE_TTS_ENCODING:-wav}
       - BLIND_PATH_MODEL=${BLIND_PATH_MODEL:-assets/models/yolo-seg.pt}
       - OBSTACLE_MODEL=${OBSTACLE_MODEL:-assets/models/yoloe-11l-seg.pt}
       - YOLOE_MODEL_PATH=${YOLOE_MODEL_PATH:-assets/models/yoloe-11l-seg.pt}
