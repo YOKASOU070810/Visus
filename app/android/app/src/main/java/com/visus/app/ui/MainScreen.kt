@@ -1,32 +1,68 @@
 package com.visus.app.ui
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.visus.app.data.SettingsDataStore
+import com.visus.app.data.StreamingUiState
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.collectAsState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     onStartStreaming: () -> Unit,
-    onStopStreaming: () -> Unit,
-    isStreaming: () -> Boolean
+    onStopStreaming: () -> Unit
 ) {
     val context = LocalContext.current
     val settingsDataStore = remember { SettingsDataStore(context) }
@@ -34,11 +70,15 @@ fun MainScreen(
 
     val serverIp by settingsDataStore.serverIp.collectAsState(initial = SettingsDataStore.DEFAULT_IP)
     val serverPort by settingsDataStore.serverPort.collectAsState(initial = SettingsDataStore.DEFAULT_PORT)
+    val streaming by StreamingUiState.isStreaming.collectAsState()
+    val connectionStatus by StreamingUiState.connectionStatus.collectAsState()
+    val partialText by StreamingUiState.partialText.collectAsState()
+    val finalMessages by StreamingUiState.finalMessages.collectAsState()
+    val latestFrame by StreamingUiState.latestFrame.collectAsState()
 
     var showSettings by remember { mutableStateOf(false) }
     var ipInput by remember { mutableStateOf("") }
     var portInput by remember { mutableStateOf("") }
-    var streaming by remember { mutableStateOf(false) }
 
     LaunchedEffect(serverIp, serverPort) {
         ipInput = serverIp
@@ -75,37 +115,48 @@ fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
+                .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 状态显示区域
-            StatusCard(
+            StatusBar(
                 isStreaming = streaming,
                 serverIp = serverIp,
-                serverPort = serverPort
+                serverPort = serverPort,
+                connectionStatus = connectionStatus
             )
 
-            Spacer(modifier = Modifier.weight(1f))
+            VideoPreview(
+                isStreaming = streaming,
+                frame = latestFrame,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.46f)
+            )
 
-            // 控制按钮
+            SpeechCard(
+                partialText = partialText,
+                finalMessages = finalMessages,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.54f)
+            )
+
             ControlButton(
                 isStreaming = streaming,
                 onToggle = {
-                    streaming = !streaming
                     if (streaming) {
-                        onStartStreaming()
-                    } else {
                         onStopStreaming()
+                    } else {
+                        onStartStreaming()
                     }
                 }
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(2.dp))
         }
     }
 
-    // 设置对话框
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { showSettings = false },
@@ -137,8 +188,8 @@ fun MainScreen(
                 TextButton(
                     onClick = {
                         scope.launch {
-                            settingsDataStore.saveServerIp(ipInput)
-                            settingsDataStore.saveServerPort(portInput)
+                            settingsDataStore.saveServerIp(ipInput.trim())
+                            settingsDataStore.saveServerPort(portInput.trim())
                             showSettings = false
                         }
                     }
@@ -156,66 +207,127 @@ fun MainScreen(
 }
 
 @Composable
-fun StatusCard(
+fun StatusBar(
     isStreaming: Boolean,
     serverIp: String,
-    serverPort: String
+    serverPort: String,
+    connectionStatus: String
 ) {
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        shape = RoundedCornerShape(16.dp),
+            .height(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isStreaming) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error
+                )
+        )
+        Text(
+            text = if (isStreaming) connectionStatus else "已停止",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "$serverIp:$serverPort",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+    }
+}
+
+@Composable
+fun VideoPreview(
+    isStreaming: Boolean,
+    frame: Bitmap?,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        if (frame != null) {
+            Image(
+                bitmap = frame.asImageBitmap(),
+                contentDescription = "相机预览",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text(
+                text = if (isStreaming) "正在打开相机" else "未开始推流",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 16.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun SpeechCard(
+    partialText: String,
+    finalMessages: List<String>,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
+            containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxSize()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "连接状态",
+                text = "语音文字",
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isStreaming) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.error
-                        )
-                )
-                Text(
-                    text = if (isStreaming) "推流中" else "已停止",
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Divider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            Text(
-                text = "服务器地址",
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-            Text(
-                text = "$serverIp:$serverPort",
                 fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurface
             )
+            Text(
+                text = partialText,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (finalMessages.isEmpty()) {
+                    item {
+                        Text(
+                            text = "还没有识别结果",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                } else {
+                    items(finalMessages.asReversed()) { message ->
+                        Text(
+                            text = message,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -229,8 +341,8 @@ fun ControlButton(
         onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp),
-        shape = RoundedCornerShape(32.dp),
+            .height(54.dp),
+        shape = RoundedCornerShape(27.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (isStreaming) MaterialTheme.colorScheme.error
             else MaterialTheme.colorScheme.primary

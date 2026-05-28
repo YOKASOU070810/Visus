@@ -7,7 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -15,7 +18,9 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.AudioFormat
+import android.media.AudioAttributes
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaRecorder
@@ -31,11 +36,13 @@ import androidx.core.app.NotificationCompat
 import com.visus.app.MainActivity
 import com.visus.app.R
 import com.visus.app.data.SettingsDataStore
+import com.visus.app.data.StreamingUiState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
 import java.io.ByteArrayOutputStream
+import java.net.URL
 import java.net.URI
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,6 +55,8 @@ class StreamingService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CAMERA_WIDTH = 640
         private const val CAMERA_HEIGHT = 480
+        private const val CAMERA_SEND_INTERVAL_MS = 100L
+        private const val CAMERA_PREVIEW_ROTATE_DEG = 90f
         private const val AUDIO_SAMPLE_RATE = 16000
         private const val AUDIO_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -63,12 +72,16 @@ class StreamingService : Service() {
     private var imageReader: ImageReader? = null
     private var cameraHandler: Handler? = null
     private var cameraHandlerThread: HandlerThread? = null
+    private var lastCameraSendMs = 0L
 
     private var audioRecord: AudioRecord? = null
     private var audioJob: Job? = null
+    private var playbackJob: Job? = null
+    private var audioTrack: AudioTrack? = null
 
     private var cameraWebSocket: WebSocketClient? = null
     private var audioWebSocket: WebSocketClient? = null
+    private var uiWebSocket: WebSocketClient? = null
     private var settingsDataStore: SettingsDataStore? = null
 
     inner class LocalBinder : Binder() {
@@ -101,6 +114,8 @@ class StreamingService : Service() {
 
     private fun startStreaming() {
         if (isStreaming.getAndSet(true)) return
+        StreamingUiState.setStreaming(true)
+        StreamingUiState.setConnectionStatus("连接服务器中")
 
         serviceScope.launch {
             try {
@@ -109,6 +124,7 @@ class StreamingService : Service() {
                 connectWebSockets(serverUrl)
                 startCamera()
                 startAudioCapture()
+                startAudioPlayback(serverUrl)
 
                 Log.i(TAG, "Streaming started: $serverUrl")
             } catch (e: Exception) {
@@ -120,10 +136,12 @@ class StreamingService : Service() {
 
     private fun stopStreaming() {
         if (!isStreaming.getAndSet(false)) return
+        StreamingUiState.setStreaming(false)
 
         serviceScope.launch {
             try {
                 stopAudioCapture()
+                stopAudioPlayback()
                 stopCamera()
                 disconnectWebSockets()
 
@@ -137,10 +155,12 @@ class StreamingService : Service() {
     private fun connectWebSockets(baseUrl: String) {
         val cameraUri = URI("$baseUrl/ws/camera")
         val audioUri = URI("$baseUrl/ws_audio")
+        val uiUri = URI("$baseUrl/ws_ui")
 
         cameraWebSocket = object : WebSocketClient(cameraUri) {
             override fun onOpen(handshakedata: ServerHandshake?) {
                 Log.i(TAG, "Camera WebSocket connected")
+                StreamingUiState.setConnectionStatus("相机已连接")
             }
 
             override fun onMessage(message: String?) {}
@@ -151,15 +171,27 @@ class StreamingService : Service() {
 
             override fun onError(ex: Exception?) {
                 Log.e(TAG, "Camera WebSocket error", ex)
+                StreamingUiState.setConnectionStatus("相机连接失败")
             }
         }.apply { connect() }
 
         audioWebSocket = object : WebSocketClient(audioUri) {
             override fun onOpen(handshakedata: ServerHandshake?) {
                 Log.i(TAG, "Audio WebSocket connected")
+                send("START")
+                StreamingUiState.setConnectionStatus("语音识别启动中")
             }
 
-            override fun onMessage(message: String?) {}
+            override fun onMessage(message: String?) {
+                if (!message.isNullOrBlank()) {
+                    Log.i(TAG, "Audio WebSocket message: $message")
+                    if (message.startsWith("OK:STARTED")) {
+                        StreamingUiState.setConnectionStatus("推流中，正在听")
+                    } else if (message.startsWith("ERR:")) {
+                        StreamingUiState.setConnectionStatus("语音启动失败")
+                    }
+                }
+            }
 
             override fun onClose(code: Int, reason: String?, remote: Boolean) {
                 Log.i(TAG, "Audio WebSocket closed: $reason")
@@ -167,15 +199,105 @@ class StreamingService : Service() {
 
             override fun onError(ex: Exception?) {
                 Log.e(TAG, "Audio WebSocket error", ex)
+                StreamingUiState.setConnectionStatus("语音连接失败")
+            }
+        }.apply { connect() }
+
+        uiWebSocket = object : WebSocketClient(uiUri) {
+            override fun onOpen(handshakedata: ServerHandshake?) {
+                Log.i(TAG, "UI WebSocket connected")
+            }
+
+            override fun onMessage(message: String?) {
+                handleUiMessage(message)
+            }
+
+            override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                Log.i(TAG, "UI WebSocket closed: $reason")
+            }
+
+            override fun onError(ex: Exception?) {
+                Log.e(TAG, "UI WebSocket error", ex)
             }
         }.apply { connect() }
     }
 
     private fun disconnectWebSockets() {
+        try {
+            if (audioWebSocket?.isOpen == true) {
+                audioWebSocket?.send("STOP")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send audio STOP", e)
+        }
         cameraWebSocket?.close()
         cameraWebSocket = null
         audioWebSocket?.close()
         audioWebSocket = null
+        uiWebSocket?.close()
+        uiWebSocket = null
+    }
+
+    private fun handleUiMessage(message: String?) {
+        val raw = message?.trim().orEmpty()
+        if (raw.isEmpty()) return
+
+        when {
+            raw.startsWith("{") -> handleUiJson(raw)
+            raw.startsWith("PARTIAL:") -> StreamingUiState.setPartialText(raw.removePrefix("PARTIAL:"))
+            raw.startsWith("FINAL:") -> {
+                val text = raw.removePrefix("FINAL:")
+                StreamingUiState.addFinalMessage(text)
+                StreamingUiState.setPartialText("等待语音输入")
+            }
+            raw.startsWith("STATUS:") -> StreamingUiState.setConnectionStatus(raw.removePrefix("STATUS:"))
+            raw.startsWith("STATE:") -> parseInitialState(raw.removePrefix("STATE:"))
+        }
+    }
+
+    private fun handleUiJson(json: String) {
+        val type = Regex("\"type\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.getOrNull(1)
+        when (type) {
+            "ai_reply" -> {
+                val text = Regex("\"text\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.getOrNull(1)
+                if (!text.isNullOrBlank()) {
+                    StreamingUiState.addFinalMessage("[AI] ${unescapeJsonText(text)}")
+                    StreamingUiState.setPartialText("等待语音输入")
+                }
+            }
+            "status" -> {
+                val stage = Regex("\"stage\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.getOrNull(1)
+                if (!stage.isNullOrBlank()) {
+                    StreamingUiState.setConnectionStatus(
+                        when (stage) {
+                            "listening" -> "正在听"
+                            "thinking" -> "AI 思考中"
+                            "speaking" -> "AI 回复中"
+                            "idle" -> "推流中"
+                            else -> stage
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun unescapeJsonText(value: String): String {
+        return value
+            .replace("\\n", "\n")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    private fun parseInitialState(json: String) {
+        Regex("\"partial\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.getOrNull(1)?.let {
+            StreamingUiState.setPartialText(it)
+        }
+        Regex("\"finals\"\\s*:\\s*\\[(.*)]").find(json)?.groupValues?.getOrNull(1)?.let { body ->
+            Regex("\"(.*?)\"").findAll(body).forEach { match ->
+                StreamingUiState.addFinalMessage(match.groupValues[1])
+            }
+        }
     }
 
     private fun startCamera() {
@@ -191,7 +313,12 @@ class StreamingService : Service() {
                     val buffer = image.planes[0].buffer
                     val bytes = ByteArray(buffer.remaining())
                     buffer.get(bytes)
-                    sendCameraFrame(bytes)
+                    updatePreviewFrame(bytes)
+                    val now = System.currentTimeMillis()
+                    if (now - lastCameraSendMs >= CAMERA_SEND_INTERVAL_MS) {
+                        lastCameraSendMs = now
+                        sendCameraFrame(bytes)
+                    }
                 } finally {
                     image.close()
                 }
@@ -265,10 +392,29 @@ class StreamingService : Service() {
     private fun sendCameraFrame(jpegData: ByteArray) {
         if (!isStreaming.get()) return
         try {
-            cameraWebSocket?.send(jpegData)
+            if (cameraWebSocket?.isOpen == true) {
+                cameraWebSocket?.send(jpegData)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send camera frame", e)
         }
+    }
+
+    private fun updatePreviewFrame(jpegData: ByteArray) {
+        try {
+            val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+            if (bitmap != null) {
+                StreamingUiState.setLatestFrame(rotateBitmap(bitmap, CAMERA_PREVIEW_ROTATE_DEG))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decode preview frame", e)
+        }
+    }
+
+    private fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
+        if (degrees == 0f) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     private fun startAudioCapture() {
@@ -305,10 +451,81 @@ class StreamingService : Service() {
         audioRecord = null
     }
 
+    private fun startAudioPlayback(baseUrl: String) {
+        val streamUrl = baseUrl
+            .replaceFirst("ws://", "http://")
+            .replaceFirst("wss://", "https://") + "/stream.wav"
+
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            8000,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(8000)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build()
+            )
+            .setBufferSizeInBytes(maxOf(minBufferSize, 6400))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        audioTrack?.play()
+
+        playbackJob = serviceScope.launch {
+            val buffer = ByteArray(1600)
+            while (isActive && isStreaming.get()) {
+                try {
+                    URL(streamUrl).openStream().use { input ->
+                        val header = ByteArray(44)
+                        var skipped = 0
+                        while (skipped < header.size) {
+                            val read = input.read(header, skipped, header.size - skipped)
+                            if (read < 0) break
+                            skipped += read
+                        }
+
+                        while (isActive && isStreaming.get()) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            audioTrack?.write(buffer, 0, read)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Audio playback stream disconnected", e)
+                    delay(1000)
+                }
+            }
+        }
+    }
+
+    private fun stopAudioPlayback() {
+        playbackJob?.cancel()
+        playbackJob = null
+        try {
+            audioTrack?.stop()
+        } catch (_: Exception) {
+        }
+        audioTrack?.release()
+        audioTrack = null
+    }
+
     private fun sendAudioData(pcmData: ByteArray) {
         if (!isStreaming.get()) return
         try {
-            audioWebSocket?.send(pcmData)
+            if (audioWebSocket?.isOpen == true) {
+                audioWebSocket?.send(pcmData)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send audio data", e)
         }

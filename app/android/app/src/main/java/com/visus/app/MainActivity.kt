@@ -59,8 +59,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainScreen(
                         onStartStreaming = { startStreamingService() },
-                        onStopStreaming = { stopStreamingService() },
-                        isStreaming = { streamingService?.isStreaming() ?: false }
+                        onStopStreaming = { stopStreamingService() }
                     )
                 }
             }

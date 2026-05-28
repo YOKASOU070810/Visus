@@ -4,6 +4,7 @@ import os, json, asyncio, time
 from typing import Any, Dict, List, Optional, Callable, Tuple
 
 ASR_DEBUG_RAW = os.getenv("ASR_DEBUG_RAW", "0") == "1"
+ASR_AUTO_REPLY_STABLE_SEC = float(os.getenv("ASR_AUTO_REPLY_STABLE_SEC", "1.4"))
 
 def _shorten(s: str, limit: int = 200) -> str:
     if not s:
@@ -111,9 +112,11 @@ class ASRCallback:
         self._post = post
         self._last_partial_for_ui: str = ""   # 只用于 UI 展示
         self._last_final_text: str = ""       # 以句末 final 为准
+        self._last_ai_text: str = ""          # 避免同一段 partial/final 重复送 LLM
         self._hot_interrupted: bool = False   # 本句是否因热词触发过复位（防抖）
         self._last_partial_emit_ts: float = 0.0
         self._partial_emit_interval: float = 0.10
+        self._auto_reply_seq: int = 0
 
         self._ui_partial = ui_broadcast_partial
         self._ui_final   = ui_broadcast_final
@@ -195,24 +198,13 @@ class ASRCallback:
             except Exception:
                 pass
 
-            if (not self._is_playing()) and final_text:
-                async def _run_final():
-                    async with self._interrupt_lock:
-                        try:
-                            print(f"[PERF] asr_final_to_ai_start={(time.perf_counter() - final_ts) * 1000:.1f} ms", flush=True)
-                        except Exception:
-                            pass
-                        print(f"[LLM INPUT TEXT] {final_text}", flush=True)
-                        await self._start_ai(final_text)
-                try:
-                    self._post(_run_final())
-                except Exception:
-                    pass
+            self._start_ai_once(final_text, "final", final_ts)
 
             # 复位进入下一句
             self._last_partial_for_ui = ""
             self._last_final_text = ""
             self._hot_interrupted = False
+            self._auto_reply_seq += 1
             return
 
         # ---------- ② partial：仅用于 UI 展示，低频刷新 ----------
@@ -229,5 +221,67 @@ class ASRCallback:
             try:
                 print(f"[ASR PARTIAL] len={len(text)} text='{_shorten(text)}'", flush=True)
                 self._post(self._ui_partial(self._last_partial_for_ui))
+                self._schedule_auto_reply(text)
             except Exception:
                 pass
+
+    def _start_ai_once(self, text: str, reason: str, start_ts: Optional[float] = None):
+        final_text = (text or "").strip()
+        if not final_text:
+            return
+        if final_text == self._last_ai_text:
+            return
+        if self._is_playing():
+            return
+        self._last_ai_text = final_text
+
+        async def _run():
+            try:
+                async with self._interrupt_lock:
+                    if self._is_playing():
+                        return
+                    if reason == "auto":
+                        print(f"[ASR AUTO FINAL] text='{final_text}'", flush=True)
+                        try:
+                            await self._ui_final(final_text)
+                        except Exception:
+                            pass
+                    try:
+                        if start_ts is not None:
+                            print(f"[PERF] asr_{reason}_to_ai_start={(time.perf_counter() - start_ts) * 1000:.1f} ms", flush=True)
+                    except Exception:
+                        pass
+                    print(f"[LLM INPUT TEXT] {final_text}", flush=True)
+                    await self._start_ai(final_text)
+            except Exception as e:
+                print(f"[ASR AI ERROR] failed to start AI reply: {repr(e)}", flush=True)
+
+        try:
+            self._post(_run())
+        except Exception:
+            pass
+
+    def _schedule_auto_reply(self, text: str):
+        if ASR_AUTO_REPLY_STABLE_SEC <= 0:
+            return
+        candidate = (text or "").strip()
+        if len(candidate) < 2:
+            return
+        self._auto_reply_seq += 1
+        seq = self._auto_reply_seq
+        scheduled_at = time.perf_counter()
+
+        async def _delayed():
+            await asyncio.sleep(ASR_AUTO_REPLY_STABLE_SEC)
+            if seq != self._auto_reply_seq:
+                return
+            if candidate != self._last_partial_for_ui:
+                return
+            if self._hot_interrupted:
+                return
+            self._start_ai_once(candidate, "auto", scheduled_at)
+
+        try:
+            self._post(_delayed())
+        except Exception:
+            pass

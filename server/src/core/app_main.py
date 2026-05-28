@@ -406,6 +406,13 @@ def compress_camera_jpeg(jpeg_bytes: bytes, max_side: int = 640, quality: int = 
     ok, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return enc.tobytes() if ok else jpeg_bytes
 
+def encode_viewer_jpeg(bgr, quality: int = 80) -> Optional[bytes]:
+    if bgr is None:
+        return None
+    display_bgr = _rotate_bgr_for_display(bgr)
+    ok, enc = cv2.imencode(".jpg", display_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    return enc.tobytes() if ok else None
+
 async def full_system_reset(reason: str = ""):
     """
     回到刚启动后的状态：
@@ -862,23 +869,21 @@ async def start_ai_with_text(user_text: str):
 
             final_text = ("".join(txt_buf)).strip() or fallback_reply
             try:
-                from audio_stream import stream_clients
+                from voice.audio_stream import stream_clients
                 has_audio_client = any(not sc.abort_event.is_set() for sc in list(stream_clients))
                 await ui_broadcast_ai_reply(final_text, tts_fallback=(not audio_sent or not has_audio_client))
                 await ui_broadcast_final("[AI] " + final_text)
                 await ui_broadcast_status("idle")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[AI UI ERROR] failed to broadcast final reply: {repr(e)}", flush=True)
             print(f"[PERF] total_reply_time={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
 
     # 真正启动前先硬重置，保证**绝无**旧音频残留
     await soft_reset_audio("start_ai_with_text")
     loop = asyncio.get_running_loop()
-    from audio_stream import current_ai_task as _task_holder  # 读写模块内全局
-    from audio_stream import __dict__ as _as_dict
-    # 设置模块内的 current_ai_task
+    from voice import audio_stream as _audio_stream
     task = loop.create_task(_runner())
-    _as_dict["current_ai_task"] = task
+    _audio_stream.current_ai_task = task
 
 # ---------- 页面 / 健康 ----------
 @app.get("/", response_class=HTMLResponse)
@@ -1298,9 +1303,8 @@ async def ws_camera_mobile(ws: WebSocket):
                     if current_state == "ITEM_SEARCH":
                         # 找物品模式下，如果yolomedia还没开始发送帧，先显示原始画面
                         if not yolomedia_sending_frames and camera_viewers:
-                            ok, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                            if ok:
-                                jpeg_data = enc.tobytes()
+                            jpeg_data = encode_viewer_jpeg(bgr, 80)
+                            if jpeg_data:
                                 dead = []
                                 for viewer_ws in list(camera_viewers):
                                     try:
@@ -1341,9 +1345,8 @@ async def ws_camera_mobile(ws: WebSocket):
 
                     # 广播图像
                     if camera_viewers and out_img is not None:
-                        ok, enc = cv2.imencode(".jpg", out_img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                        if ok:
-                            jpeg_data = enc.tobytes()
+                        jpeg_data = encode_viewer_jpeg(out_img, 80)
+                        if jpeg_data:
                             dead = []
                             for viewer_ws in list(camera_viewers):
                                 try:
@@ -1362,9 +1365,8 @@ async def ws_camera_mobile(ws: WebSocket):
                             arr = np.frombuffer(data, dtype=np.uint8)
                             bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                         if bgr is not None:
-                            ok, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                            if ok:
-                                jpeg_data = enc.tobytes()
+                            jpeg_data = encode_viewer_jpeg(bgr, 80)
+                            if jpeg_data:
                                 dead = []
                                 for viewer_ws in list(camera_viewers):
                                     try:
