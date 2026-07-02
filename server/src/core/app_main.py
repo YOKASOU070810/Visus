@@ -122,7 +122,15 @@ from audio import sync_recorder
 import signal
 import atexit
 
+# ---- 社交模块（好友预警 / 紧急通知） ----
+from social.database import init_db
+from social.api_routes import router as social_router
+from social.status_ws import handle_status_websocket
+
 app = FastAPI()
+
+# 注册社交 API 路由 (/api/login, /api/friends, /api/status, etc.)
+app.include_router(social_router)
 
 AI_MIC_SUPPRESS_TAIL_SEC = float(os.getenv("AI_MIC_SUPPRESS_TAIL_SEC", "1.8"))
 
@@ -1444,6 +1452,11 @@ async def ws_viewer(ws: WebSocket):
             pass
         print(f"[VIEWER] Removed. Total viewers: {len(camera_viewers)}", flush=True)
 
+# ---------- WebSocket：社交状态推送（好友状态 / 紧急通知） ----------
+@app.websocket("/ws/social")
+async def ws_social(ws: WebSocket):
+    await handle_status_websocket(ws)
+
 # === 新增：注册给 bridge_io 的发送回调（把 JPEG 广播给 /ws/viewer） ===
 @app.on_event("startup")
 async def on_startup_register_bridge_sender():
@@ -1499,6 +1512,15 @@ async def on_startup_init_audio():
             print(f"[AUDIO] 初始化失败: {e}")
     
     threading.Thread(target=_init, daemon=True).start()
+
+@app.on_event("startup")
+async def on_startup_init_social_db():
+    """启动时初始化社交数据库"""
+    try:
+        init_db()
+        print("[SOCIAL] 社交数据库初始化完成", flush=True)
+    except Exception as e:
+        print(f"[SOCIAL] 数据库初始化失败: {e}", flush=True)
 
 @app.on_event("shutdown")
 async def on_shutdown():

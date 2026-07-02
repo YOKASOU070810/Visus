@@ -31,6 +31,9 @@ class OrchestratorResult:
     guidance_text: str
     state: str
     extras: Dict[str, Any]
+    # Emergency detection fields (for social/alert integration)
+    fall_confidence: float = 0.0
+    obstacle_coverage_ratio: float = 0.0
 
 # ========== 实用：信号平滑/多数表决 ==========
 class MajorityFilter:
@@ -243,6 +246,19 @@ def _draw_progress_bar(img, ratio: float, pos=(10, 90), size=(180, 10), color="c
 
 # ========== 统领器 ==========
 class NavigationMaster:
+    # Emergency detector (lazy init)
+    _emergency_detector = None
+
+    @classmethod
+    def get_emergency_detector(cls):
+        if cls._emergency_detector is None:
+            try:
+                from social.emergency import emergency_detector
+                cls._emergency_detector = emergency_detector
+            except ImportError:
+                cls._emergency_detector = None
+        return cls._emergency_detector
+
     def __init__(self,
                  blind_nav: BlindPathNavigator,
                  cross_nav: CrossStreetNavigator,
@@ -419,7 +435,22 @@ class NavigationMaster:
     # ----- 主循环 -----
     def process_frame(self, bgr: np.ndarray) -> OrchestratorResult:
         now = time.time()
-        
+
+        # 【新增】Emergency check - evaluate each frame for fall/collision
+        emergency = self.get_emergency_detector()
+        if emergency:
+            try:
+                eval_result = emergency.evaluate_frame(
+                    user_id=-1,  # will be set by caller
+                    frame_analysis=None,  # current frame analysis
+                    voice_text=None,
+                    imu_data=None,
+                )
+            except Exception:
+                eval_result = None
+        else:
+            eval_result = None
+
         # 【修改】IDLE状态默认进入CHAT模式，而不是自动开始导航
         if self.state == IDLE:
             self.state = CHAT

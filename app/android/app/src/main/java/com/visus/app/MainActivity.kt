@@ -13,13 +13,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
+import com.visus.app.data.AuthState
+import com.visus.app.network.SocialApiClient
 import com.visus.app.service.StreamingService
-import com.visus.app.ui.MainScreen
+import com.visus.app.ui.screens.HomeScreen
+import com.visus.app.ui.screens.LoginScreen
 import com.visus.app.ui.theme.VisusTheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -32,7 +34,6 @@ class MainActivity : ComponentActivity() {
             streamingService = binder.getService()
             serviceBound = true
         }
-
         override fun onServiceDisconnected(name: ComponentName?) {
             streamingService = null
             serviceBound = false
@@ -51,21 +52,54 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize auth state (restore saved session)
+        AuthState.init(applicationContext)
+
         setContent {
             VisusTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
-                        onStartStreaming = { startStreamingService() },
-                        onStopStreaming = { stopStreamingService() }
-                    )
+                    var isLoggedIn by remember {
+                        mutableStateOf(AuthState.isLoggedIn.value)
+                    }
+
+                    // Observe auth state changes
+                    val authState by AuthState.isLoggedIn.collectAsState()
+                    LaunchedEffect(authState) {
+                        isLoggedIn = authState
+                        if (authState) {
+                            AuthState.token.value?.let { SocialApiClient.setToken(it) }
+                        }
+                    }
+
+                    if (isLoggedIn) {
+                        HomeScreen(
+                            onStartStreaming = { startStreamingService() },
+                            onStopStreaming = { stopStreamingService() },
+                            onLogout = {
+                                stopStreamingService()
+                                isLoggedIn = false
+                            }
+                        )
+                    } else {
+                        LoginScreen(
+                            onLoginSuccess = {
+                                isLoggedIn = true
+                                // Request permissions after login
+                                requestPermissions()
+                            }
+                        )
+                    }
                 }
             }
         }
 
-        requestPermissions()
+        // Request permissions if already logged in
+        if (AuthState.isLoggedIn.value) {
+            requestPermissions()
+        }
     }
 
     override fun onDestroy() {
@@ -81,7 +115,12 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
         )
-        permissionLauncher.launch(permissions)
+        val missing = permissions.any {
+            ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (missing) {
+            permissionLauncher.launch(permissions)
+        }
     }
 
     private fun startStreamingService() {

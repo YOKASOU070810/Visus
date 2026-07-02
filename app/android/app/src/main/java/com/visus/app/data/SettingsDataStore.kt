@@ -16,7 +16,7 @@ class SettingsDataStore(private val context: Context) {
     companion object {
         val SERVER_IP = stringPreferencesKey("server_ip")
         val SERVER_PORT = stringPreferencesKey("server_port")
-        val DEFAULT_IP = "192.168.1.100"
+        val DEFAULT_IP = "10.0.2.2"
         val DEFAULT_PORT = "8081"
     }
 
