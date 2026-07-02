@@ -117,6 +117,7 @@ class ASRCallback:
         self._last_partial_emit_ts: float = 0.0
         self._partial_emit_interval: float = 0.10
         self._auto_reply_seq: int = 0
+        self._utterance_start_ts: Optional[float] = None
 
         self._ui_partial = ui_broadcast_partial
         self._ui_final   = ui_broadcast_final
@@ -193,6 +194,11 @@ class ASRCallback:
             try:
                 final_ts = time.perf_counter()
                 print(f"[PERF] asr_final_received_at={final_ts:.6f}", flush=True)
+                print(f"[PERF] asr_final_at={final_ts:.6f}", flush=True)
+                if self._utterance_start_ts is not None:
+                    print(f"[PERF_ASR] final={final_text} latency_ms={(final_ts - self._utterance_start_ts) * 1000:.1f}", flush=True)
+                else:
+                    print(f"[PERF_ASR] final={final_text} latency_ms=unknown", flush=True)
                 print(f"[ASR FINAL]  len={len(final_text)} text='{final_text}'", flush=True)
                 self._post(self._ui_final(final_text))
             except Exception:
@@ -204,6 +210,7 @@ class ASRCallback:
             self._last_partial_for_ui = ""
             self._last_final_text = ""
             self._hot_interrupted = False
+            self._utterance_start_ts = None
             self._auto_reply_seq += 1
             return
 
@@ -216,10 +223,13 @@ class ASRCallback:
             or not text.startswith(self._last_partial_for_ui)
         )
         if meaningful and (now - self._last_partial_emit_ts) >= self._partial_emit_interval:
+            if self._utterance_start_ts is None:
+                self._utterance_start_ts = now
             self._last_partial_for_ui = text
             self._last_partial_emit_ts = now
             try:
                 print(f"[ASR PARTIAL] len={len(text)} text='{_shorten(text)}'", flush=True)
+                print(f"[PERF_ASR] partial={_shorten(text, 80)}", flush=True)
                 self._post(self._ui_partial(self._last_partial_for_ui))
                 self._schedule_auto_reply(text)
             except Exception:

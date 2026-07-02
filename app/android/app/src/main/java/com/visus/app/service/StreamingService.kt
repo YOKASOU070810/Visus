@@ -30,6 +30,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.Surface
@@ -42,6 +45,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.net.URI
@@ -84,12 +88,16 @@ class StreamingService : Service() {
     private var micResumeJob: Job? = null
     private var audioTrack: AudioTrack? = null
     private val suppressMicUpload = AtomicBoolean(false)
+    private var audioBytesSentThisSecond = 0L
+    private var audioStatsLastLogMs = 0L
 
     private var cameraWebSocket: WebSocketClient? = null
     private var audioWebSocket: WebSocketClient? = null
     private var uiWebSocket: WebSocketClient? = null
     private var settingsDataStore: SettingsDataStore? = null
     private var textToSpeech: TextToSpeech? = null
+    private var lastAlertUiMs = 0L
+    private var lastAlertLogMs = 0L
 
     inner class LocalBinder : Binder() {
         fun getService(): StreamingService = this@StreamingService
@@ -193,7 +201,9 @@ class StreamingService : Service() {
         audioWebSocket = object : WebSocketClient(audioUri) {
             override fun onOpen(handshakedata: ServerHandshake?) {
                 Log.i(TAG, "Audio WebSocket connected")
+                Log.i(TAG, "[PERF_ASR] audio_ws_connected")
                 send("START")
+                Log.i(TAG, "[PERF_ASR] sent START to /ws_audio")
                 StreamingUiState.setConnectionStatus("语音识别启动中")
             }
 
@@ -254,19 +264,23 @@ class StreamingService : Service() {
     }
 
     private fun handleUiMessage(message: String?) {
-        val raw = message?.trim().orEmpty()
-        if (raw.isEmpty()) return
+        try {
+            val raw = message?.trim().orEmpty()
+            if (raw.isEmpty()) return
 
-        when {
-            raw.startsWith("{") -> handleUiJson(raw)
-            raw.startsWith("PARTIAL:") -> StreamingUiState.setPartialText(raw.removePrefix("PARTIAL:"))
-            raw.startsWith("FINAL:") -> {
-                val text = raw.removePrefix("FINAL:")
-                StreamingUiState.addFinalMessage(text)
-                StreamingUiState.setPartialText("等待语音输入")
+            when {
+                raw.startsWith("{") -> handleUiJson(raw)
+                raw.startsWith("PARTIAL:") -> StreamingUiState.setPartialText(raw.removePrefix("PARTIAL:"))
+                raw.startsWith("FINAL:") -> {
+                    val text = raw.removePrefix("FINAL:")
+                    StreamingUiState.addFinalMessage(text)
+                    StreamingUiState.setPartialText("等待语音输入")
+                }
+                raw.startsWith("STATUS:") -> StreamingUiState.setConnectionStatus(raw.removePrefix("STATUS:"))
+                raw.startsWith("STATE:") -> parseInitialState(raw.removePrefix("STATE:"))
             }
-            raw.startsWith("STATUS:") -> StreamingUiState.setConnectionStatus(raw.removePrefix("STATUS:"))
-            raw.startsWith("STATE:") -> parseInitialState(raw.removePrefix("STATE:"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle UI message", e)
         }
     }
 
@@ -294,6 +308,7 @@ class StreamingService : Service() {
                             "thinking" -> "AI 思考中"
                             "speaking" -> {
                                 micResumeJob?.cancel()
+                                Log.i(TAG, "[PERF_ASR] mic_suppressed=true reason=server_speaking")
                                 suppressMicUpload.set(true)
                                 "AI 回复中"
                             }
@@ -306,6 +321,82 @@ class StreamingService : Service() {
                     )
                 }
             }
+            "multimodal_alert" -> handleMultimodalAlert(json)
+        }
+    }
+
+    private fun handleMultimodalAlert(json: String) {
+        try {
+            val now = System.currentTimeMillis()
+            if (now - lastAlertLogMs >= 1000L) {
+                Log.i(TAG, "[MULTIMODAL_ALERT] received raw length=${json.length}")
+                lastAlertLogMs = now
+            }
+            val payload = JSONObject(json)
+            val level = payload.optString("level", "medium")
+            val text = payload.optString("text", "")
+            val shouldVibrate = payload.optBoolean("vibrate", true)
+            val shouldSpeak = payload.optBoolean("speak", false)
+
+            Log.i(TAG, "[MULTIMODAL_ALERT] parsed level=$level vibrate=$shouldVibrate speak=$shouldSpeak text=$text")
+            if (text.isNotBlank() && now - lastAlertUiMs >= 1000L) {
+                StreamingUiState.addFinalMessage("[预警] $text")
+                StreamingUiState.setConnectionStatus(text)
+                lastAlertUiMs = now
+            }
+            if (shouldVibrate) {
+                Log.i(TAG, "[MULTIMODAL_ALERT] calling vibrateAlert")
+                vibrateAlert(level)
+            }
+            if (shouldSpeak && text.isNotBlank()) {
+                speakText(text)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to handle multimodal alert: $json", e)
+        }
+    }
+
+    private fun vibrateAlert(level: String) {
+        val normalizedLevel = level.lowercase(Locale.ROOT)
+        val pattern = when (normalizedLevel) {
+            "low" -> longArrayOf(0, 120)
+            "medium" -> longArrayOf(0, 160, 120, 160)
+            "high" -> longArrayOf(0, 250, 120, 250, 120, 250)
+            "critical" -> longArrayOf(0, 500, 120, 250, 120, 250)
+            else -> longArrayOf(0, 160, 120, 160)
+        }
+        val amplitudes = when (normalizedLevel) {
+            "low" -> intArrayOf(0, 120)
+            "medium" -> intArrayOf(0, 180, 0, 180)
+            "high" -> intArrayOf(0, 255, 0, 255, 0, 255)
+            "critical" -> intArrayOf(0, 255, 0, 255, 0, 255)
+            else -> intArrayOf(0, 180, 0, 180)
+        }
+
+        try {
+            Log.i(TAG, "[MULTIMODAL_ALERT] vibrate level=$normalizedLevel pattern=${pattern.contentToString()}")
+
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val manager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                manager.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+
+            if (!vibrator.hasVibrator()) {
+                Log.w(TAG, "[MULTIMODAL_ALERT] device has no vibrator")
+                return
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(pattern, -1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[MULTIMODAL_ALERT] failed to vibrate alert", e)
         }
     }
 
@@ -319,6 +410,7 @@ class StreamingService : Service() {
     private fun speakText(text: String) {
         if (text.isBlank()) return
         micResumeJob?.cancel()
+        Log.i(TAG, "[PERF_ASR] mic_suppressed=true reason=local_tts")
         suppressMicUpload.set(true)
         textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "visus_ai_reply")
         scheduleMicResume(3000L)
@@ -329,6 +421,7 @@ class StreamingService : Service() {
         micResumeJob = serviceScope.launch {
             delay(delayMs)
             suppressMicUpload.set(false)
+            Log.i(TAG, "[PERF_ASR] mic_suppressed=false")
         }
     }
 
@@ -474,13 +567,24 @@ class StreamingService : Service() {
         )
 
         audioRecord?.startRecording()
+        Log.i(TAG, "[PERF_ASR] mic recording started sampleRate=$AUDIO_SAMPLE_RATE bufferSize=${maxOf(minBufferSize, AUDIO_BUFFER_SIZE)}")
 
         audioJob = serviceScope.launch {
             val buffer = ByteArray(AUDIO_BUFFER_SIZE)
             while (isActive && isStreaming.get()) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0 && !suppressMicUpload.get()) {
-                    sendAudioData(buffer.copyOf(read))
+                if (read > 0) {
+                    val suppressed = suppressMicUpload.get()
+                    if (!suppressed) {
+                        sendAudioData(buffer.copyOf(read))
+                        audioBytesSentThisSecond += read.toLong()
+                    }
+                    val now = System.currentTimeMillis()
+                    if (now - audioStatsLastLogMs >= 1000L) {
+                        Log.i(TAG, "[PERF_ASR] audio_bytes_per_sec=$audioBytesSentThisSecond suppressed=$suppressed")
+                        audioBytesSentThisSecond = 0L
+                        audioStatsLastLogMs = now
+                    }
                 }
             }
         }
@@ -489,6 +593,7 @@ class StreamingService : Service() {
     private fun stopAudioCapture() {
         micResumeJob?.cancel()
         micResumeJob = null
+        Log.i(TAG, "[PERF_ASR] mic_suppressed=false reason=stop_audio_capture")
         suppressMicUpload.set(false)
         audioJob?.cancel()
         audioJob = null

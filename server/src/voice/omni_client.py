@@ -1,6 +1,7 @@
 # doubao_client.py-compatible module name
 # -*- coding: utf-8 -*-
 import os
+import asyncio
 from typing import AsyncGenerator, Dict, Any, List, Optional
 
 from openai import OpenAI
@@ -20,15 +21,28 @@ if not DOUBAO_MODEL:
 BUILTIN_SYSTEM_PROMPT = load_builtin_system_prompt()
 VOICE_REPLY_RULES = (
     "\n\n补充语音播报规则："
-    "除危险预警或复杂导航外，通常用 1 到 3 句回答；"
-    "先回应用户当前问题，再结合画面给出必要的出行辅助；"
-    "如果用户只是打招呼，要友好回应，并提示可以帮忙看路、找物品、读文字或描述周围。"
+    "除危险预警或复杂导航外，最多用 1 到 2 句回答，适合直接语音播报；"
+    "涉及画面、障碍物、道路、红绿灯、物品位置的问题，必须只根据当前帧或结构化检测结果回答；"
+    "凡是涉及前方路况、障碍物、能否通行、是否安全的问题，必须只根据当前视频帧或结构化检测结果回答；"
+    "没有当前视觉证据时，必须说“我暂时没有看到清晰画面，无法判断前方情况。”；"
+    "禁止凭常识或想象说“前方安全”“可以走”“没有障碍物”；"
+    "安全预警由规则系统负责，不要自行编造危险。"
 )
 
 ark_client = OpenAI(
     api_key=ARK_API_KEY,
     base_url=ARK_BASE_URL,
 )
+
+
+_SENTINEL = object()
+
+
+def _next_stream_item(iterator):
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _SENTINEL
 
 class OmniStreamPiece:
     """统一增量数据结构；豆包方舟 Chat Completions 当前只返回文本增量。"""
@@ -77,6 +91,7 @@ async def stream_chat(
     Chat Completions 不通过该接口直接返回音频，因此这里仅产出文本。
     """
     system_prompt = BUILTIN_SYSTEM_PROMPT + VOICE_REPLY_RULES
+    has_image = any(isinstance(item, dict) and item.get("type") == "image_url" for item in content_list)
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": content_list},
@@ -86,19 +101,29 @@ async def stream_chat(
         "model": DOUBAO_MODEL,
         "messages": messages,
         "stream": True,
+        "max_tokens": int(os.getenv("ARK_MAX_TOKENS", "80")),
     }
 
     try:
-        completion = ark_client.chat.completions.create(**request_kwargs)
+        completion = await asyncio.to_thread(ark_client.chat.completions.create, **request_kwargs)
     except Exception as e:
         print(f"[DOUBAO WARN] multimodal request failed, retrying text only: {repr(e)}", flush=True)
-        completion = ark_client.chat.completions.create(
+        if has_image:
+            yield OmniStreamPiece(text_delta="我暂时没有看到清晰画面，无法判断前方情况。")
+            return
+        completion = await asyncio.to_thread(
+            ark_client.chat.completions.create,
             model=DOUBAO_MODEL,
             messages=_text_only_messages(system_prompt, content_list),
             stream=True,
+            max_tokens=int(os.getenv("ARK_MAX_TOKENS", "80")),
         )
 
-    for chunk in completion:
+    iterator = iter(completion)
+    while True:
+        chunk = await asyncio.to_thread(_next_stream_item, iterator)
+        if chunk is _SENTINEL:
+            break
         text_delta: Optional[str] = None
         if getattr(chunk, "choices", None):
             c0 = chunk.choices[0]
