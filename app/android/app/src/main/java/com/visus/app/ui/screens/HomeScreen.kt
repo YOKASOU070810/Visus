@@ -89,7 +89,14 @@ fun HomeScreen(
     }
     LaunchedEffect(serverIp, serverPort) {
         SocialApiClient.setServer("http://$serverIp:$serverPort")
-        AuthState.token.value?.let { SocialApiClient.setToken(it) }
+        val token = AuthState.token.value
+        token?.let { SocialApiClient.setToken(it) }
+        // Start emergency notification service (listens for SOS in background)
+        if (token != null) {
+            com.visus.app.service.EmergencyNotificationService.start(
+                context, "http://$serverIp:$serverPort", token
+            )
+        }
     }
     // Periodic unread count check
     val unread by SocialState.unreadCount.collectAsState()

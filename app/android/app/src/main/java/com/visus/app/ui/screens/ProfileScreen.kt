@@ -207,6 +207,7 @@ fun ProfileScreen(onLogout: () -> Unit) {
             text = { Text("退出登录后需要重新输入账号密码。") },
             confirmButton = {
                 Button(onClick = {
+                    com.visus.app.service.EmergencyNotificationService.stop(context)
                     SocialApiClient.logout()
                     AuthState.logout()
                     onLogout()

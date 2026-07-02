@@ -273,6 +273,20 @@ def initialize_audio_system():
     
     print("[AUDIO] 音频系统初始化完成（预加载+工作线程）")
 
+def clear_voice_queue(reason: str = ""):
+    """Drop queued prompt audio while keeping the worker and stream clients alive."""
+    try:
+        dropped = 0
+        while True:
+            try:
+                _audio_queue.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                break
+        print(f"[AUDIO_QUEUE] clear {reason} dropped={dropped}", flush=True)
+    except Exception as e:
+        print(f"[AUDIO_QUEUE] clear failed: {e}", flush=True)
+
 def play_audio_threadsafe(audio_key):
     """线程安全的音频播放函数"""
     global _audio_queue, _audio_priority
