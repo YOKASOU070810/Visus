@@ -112,7 +112,7 @@ fun ProfileScreen(onLogout: () -> Unit) {
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("切换身份模式 (当前: ${if (ut == "blind") "盲人" else "家属"})", modifier = Modifier.weight(1f),
+                        Text("切换身份模式 (当前: ${if (ut == "blind") "视障人士" else "家属"})", modifier = Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.tertiary)
                     }
                     HorizontalDivider()

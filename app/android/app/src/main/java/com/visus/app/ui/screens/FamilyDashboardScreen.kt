@@ -157,7 +157,7 @@ fun FamilyDashboardScreen() {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("暂无家人", fontSize = 18.sp)
-                            Text("请让盲人亲属将您设为家人", fontSize = 14.sp, color = Color.Gray)
+                            Text("请让视障亲属将您设为家人", fontSize = 14.sp, color = Color.Gray)
                         }
                     }
                 } else {
@@ -243,7 +243,7 @@ fun FamilyDashboardScreen() {
                         Image(cameraFrame!!.asImageBitmap(), "camera", Modifier.fillMaxWidth().height(300.dp), contentScale = ContentScale.Fit)
                     } else {
                         Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                            Text("等待画面...\n请确认盲人亲属正在使用导航功能")
+                            Text("等待画面...\n请确认视障亲属正在使用导航功能")
                         }
                     }
                 }

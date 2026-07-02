@@ -199,7 +199,7 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center) {
                             Text("🧑‍🦯", fontSize = 24.sp)
-                            Text("我是盲人", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text("我是视障人士", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                     Card(
