@@ -34,6 +34,7 @@ class User(Base):
     first_name = Column(String(150), default="")
     last_name = Column(String(150), default="")
     is_active = Column(Boolean, default=True)
+    user_type = Column(String(20), default="blind")  # "blind" or "family"
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = Column(DateTime, nullable=True)
 
@@ -59,6 +60,7 @@ class User(Base):
             "email": self.email,
             "first_name": self.first_name,
             "last_name": self.last_name,
+            "user_type": self.user_type,
         }
 
 
@@ -124,10 +126,40 @@ class Friendship(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user1_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     user2_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    is_family = Column(Boolean, default=False)  # True if designated as family
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user1 = relationship("User", foreign_keys=[user1_id])
     user2 = relationship("User", foreign_keys=[user2_id])
+
+
+# ── FriendMessage (private 1-on-1 chat) ──
+class FriendMessage(Base):
+    __tablename__ = "friend_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    msg_type = Column(String(20), default="text")  # text, location, image
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    sender = relationship("User", foreign_keys=[sender_id])
+    receiver = relationship("User", foreign_keys=[receiver_id])
+
+    def to_dict(self):
+        return {
+            "id": self.id, "sender_id": self.sender_id, "receiver_id": self.receiver_id,
+            "sender": self.sender.to_dict() if self.sender else None,
+            "receiver": self.receiver.to_dict() if self.receiver else None,
+            "content": self.content, "msg_type": self.msg_type,
+            "latitude": self.latitude, "longitude": self.longitude,
+            "is_read": self.is_read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 # ── EmergencyEvent (for tracking emergencies) ──
@@ -159,6 +191,79 @@ class EmergencyEvent(Base):
             "city": self.city,
             "description": self.description,
             "is_resolved": self.is_resolved,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ── Chat Groups ──
+class ChatGroup(Base):
+    __tablename__ = "chat_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False)
+    creator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_message_at = Column(DateTime, nullable=True)
+
+    creator = relationship("User")
+    members = relationship("GroupMember", back_populates="group", lazy="dynamic")
+    messages = relationship("GroupMessage", back_populates="group", lazy="dynamic")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "creator_id": self.creator_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_message_at": self.last_message_at.isoformat() if self.last_message_at else None,
+        }
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    __table_args__ = (UniqueConstraint("group_id", "user_id"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey("chat_groups.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    joined_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    group = relationship("ChatGroup", back_populates="members")
+    user = relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "user": self.user.to_dict() if self.user else None,
+            "joined_at": self.joined_at.isoformat() if self.joined_at else None,
+        }
+
+
+class GroupMessage(Base):
+    __tablename__ = "group_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey("chat_groups.id"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    msg_type = Column(String(20), default="text")  # text, location, emergency
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    group = relationship("ChatGroup", back_populates="messages")
+    sender = relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "sender": self.sender.to_dict() if self.sender else None,
+            "content": self.content,
+            "msg_type": self.msg_type,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

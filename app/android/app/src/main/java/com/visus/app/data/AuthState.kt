@@ -34,6 +34,9 @@ object AuthState {
     private val _currentUserName = MutableStateFlow("")
     val currentUserName: StateFlow<String> = _currentUserName.asStateFlow()
 
+    private val _userType = MutableStateFlow("blind")
+    val userType: StateFlow<String> = _userType.asStateFlow()
+
     fun init(context: Context) {
         if (prefs == null) {
             prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -50,11 +53,12 @@ object AuthState {
         }
     }
 
-    fun saveLogin(token: String, userId: Int, email: String, firstName: String, lastName: String) {
+    fun saveLogin(token: String, userId: Int, email: String, firstName: String, lastName: String, userType: String = "blind") {
         _token.value = token
         _currentUserId.value = userId
         userEmail = email
         _currentUserName.value = "$firstName $lastName".trim()
+        _userType.value = userType
         _isLoggedIn.value = true
 
         prefs?.edit()?.apply {
@@ -78,4 +82,9 @@ object AuthState {
     }
 
     fun getCurrentEmail(): String = userEmail
+
+    fun switchMode() {
+        val newType = if (_userType.value == "family") "blind" else "family"
+        _userType.value = newType
+    }
 }

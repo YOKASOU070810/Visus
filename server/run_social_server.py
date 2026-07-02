@@ -23,9 +23,17 @@ app.add_middleware(
 # ---- Social API ----
 from social.database import init_db
 from social.api_routes import router as social_router
+from social.groups import router as groups_router
+from social.maps import router as maps_router
+from social.ai_agent import router as agent_router
+from social.messaging import router as messaging_router
 from social.status_ws import handle_status_websocket
 
 app.include_router(social_router)
+app.include_router(groups_router)
+app.include_router(maps_router)
+app.include_router(agent_router)
+app.include_router(messaging_router)
 
 @app.get("/")
 def root():

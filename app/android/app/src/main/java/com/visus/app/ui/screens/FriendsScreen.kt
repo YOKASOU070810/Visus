@@ -16,10 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.visus.app.data.AuthState
 import com.visus.app.data.SocialState
+import com.visus.app.network.SocialApiClient
 import com.visus.app.network.SocialApiClient.FriendInfo
 import kotlinx.coroutines.launch
 
@@ -30,6 +33,16 @@ fun FriendsScreen(
     onNavigateToRequests: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var showChat by remember { mutableStateOf(false) }
+    var chatId by remember { mutableStateOf(0) }
+    var chatName by remember { mutableStateOf("") }
+
+    if (showChat) {
+        ChatScreen(friendId = chatId, friendName = chatName, onBack = { showChat = false })
+        return
+    }
+    // rest unchanged
     val friends by SocialState.friends.collectAsState()
     val myStatus by SocialState.myStatus.collectAsState()
     val isLoading by SocialState.isLoadingFriends.collectAsState()
@@ -114,7 +127,26 @@ fun FriendsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(friends, key = { it.user.id }) { friend ->
-                        FriendCard(friend)
+                        FriendCard(friend,
+                            onChat = {
+                                chatId = friend.user.id
+                                chatName = "${friend.user.firstName} ${friend.user.lastName}"
+                                showChat = true
+                            },
+                            onSetFamily = {
+                                scope.launch {
+                                    try {
+                                        val token = AuthState.token.value ?: return@launch
+                                        val resp = SocialApiClient.post("/api/family/set",
+                                            org.json.JSONObject().apply { put("friend_id", friend.user.id) }, token)
+                                        SocialState.loadFriends()
+                                        android.widget.Toast.makeText(context, "已设为家人", android.widget.Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "设置失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -208,59 +240,42 @@ fun MyStatusCard(isSafe: Boolean?, onSetSafe: () -> Unit, onSetUnsafe: () -> Uni
 }
 
 @Composable
-fun FriendCard(friend: FriendInfo) {
+fun FriendCard(friend: FriendInfo, onChat: (() -> Unit)? = null, onSetFamily: (() -> Unit)? = null) {
+    var showActions by remember { mutableStateOf(false) }
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable { showActions = !showActions },
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Status dot
-            Box(
-                modifier = Modifier
-                    .size(14.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (friend.status) {
-                            true -> Color(0xFF34A853)
-                            false -> Color(0xFFE63946)
-                            null -> Color.Gray
-                        }
-                    )
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "${friend.user.firstName} ${friend.user.lastName}",
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 15.sp
-                )
-                Text(friend.user.email, fontSize = 13.sp, color = Color.Gray)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    when (friend.status) {
-                        true -> "安全"
-                        false -> if (friend.alertType?.startsWith("emergency") == true) "⚠ 紧急" else "不安全"
-                        null -> "未知"
-                    },
-                    color = when (friend.status) {
-                        true -> Color(0xFF34A853)
-                        false -> Color(0xFFE63946)
-                        null -> Color.Gray
-                    },
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
-                )
-                if (!friend.city.isNullOrBlank()) {
-                    Text(friend.city!!, fontSize = 12.sp, color = Color.Gray)
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(14.dp).clip(CircleShape).background(
+                    when (friend.status) { true -> Color(0xFF34A853); false -> Color(0xFFE63946); null -> Color.Gray }
+                ))
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("${friend.user.firstName} ${friend.user.lastName}", fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                    Text(friend.user.email, fontSize = 13.sp, color = Color.Gray)
                 }
-                if (!friend.lastUpdated.isNullOrBlank()) {
-                    val time = friend.lastUpdated!!.takeLast(8).take(5) // extract HH:mm
-                    Text(time, fontSize = 11.sp, color = Color.Gray)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        when (friend.status) { true -> "安全"; false -> if (friend.alertType?.startsWith("emergency") == true) "⚠ 紧急" else "不安全"; null -> "未知" },
+                        color = when (friend.status) { true -> Color(0xFF34A853); false -> Color(0xFFE63946); null -> Color.Gray },
+                        fontWeight = FontWeight.Bold, fontSize = 13.sp
+                    )
+                    if (!friend.city.isNullOrBlank()) Text(friend.city!!, fontSize = 12.sp, color = Color.Gray)
+                    if (!friend.lastUpdated.isNullOrBlank()) { val time = friend.lastUpdated!!.takeLast(8).take(5); Text(time, fontSize = 11.sp, color = Color.Gray) }
+                }
+            }
+            if (showActions) {
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onChat?.invoke() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))) {
+                        Text("💬 聊天", fontSize = 12.sp)
+                    }
+                    OutlinedButton(onClick = { onSetFamily?.invoke() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
+                        Text("👨‍👩‍👧 设为家人", fontSize = 12.sp)
+                    }
                 }
             }
         }

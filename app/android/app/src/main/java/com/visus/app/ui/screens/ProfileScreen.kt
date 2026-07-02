@@ -10,23 +10,29 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Context
 import com.visus.app.data.AuthState
 import com.visus.app.data.SocialState
 import com.visus.app.data.SettingsDataStore
 import com.visus.app.network.SocialApiClient
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(onLogout: () -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val settingsStore = remember { SettingsDataStore(context) }
     val userName by AuthState.currentUserName.collectAsState()
     val userId by AuthState.currentUserId.collectAsState()
     val myStatus by SocialState.myStatus.collectAsState()
     var showServerSettings by remember { mutableStateOf(false) }
+    var showApiKeySettings by remember { mutableStateOf(false) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -86,8 +92,28 @@ fun ProfileScreen(onLogout: () -> Unit) {
                     TextButton(
                         onClick = { showServerSettings = true },
                         modifier = Modifier.fillMaxWidth()
+                    ) { Text("服务器设置", modifier = Modifier.weight(1f)) }
+                    HorizontalDivider()
+                    TextButton(
+                        onClick = { showApiKeySettings = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("API 密钥配置 (高德/豆包)", modifier = Modifier.weight(1f)) }
+                    HorizontalDivider()
+                    val ut by AuthState.userType.collectAsState()
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val token = AuthState.token.value ?: return@launch
+                                    SocialApiClient.post("/api/profile/switch-mode", JSONObject(), token)
+                                    AuthState.switchMode()
+                                } catch (_: Exception) {}
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("服务器设置", modifier = Modifier.weight(1f))
+                        Text("切换身份模式 (当前: ${if (ut == "blind") "盲人" else "家属"})", modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.tertiary)
                     }
                     HorizontalDivider()
                     TextButton(
@@ -139,6 +165,37 @@ fun ProfileScreen(onLogout: () -> Unit) {
                 }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { showServerSettings = false }) { Text("取消") } }
+        )
+    }
+
+    // API Key settings dialog
+    if (showApiKeySettings) {
+        val savedAmap by settingsStore.amapKey.collectAsState(initial = "")
+        val savedArk by settingsStore.arkKey.collectAsState(initial = "")
+        var amapInput by remember { mutableStateOf(savedAmap) }
+        var arkInput by remember { mutableStateOf(savedArk) }
+        AlertDialog(
+            onDismissRequest = { showApiKeySettings = false },
+            title = { Text("API 密钥配置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("配置你自己的 API Key，留空则使用服务器默认配置。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(value = amapInput, onValueChange = { amapInput = it }, label = { Text("高德地图 API Key") }, placeholder = { Text("可选，用于地图导航") }, singleLine = true)
+                    OutlinedTextField(value = arkInput, onValueChange = { arkInput = it }, label = { Text("豆包 (Ark) API Key") }, placeholder = { Text("可选，用于AI助手") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        settingsStore.saveAmapKey(amapInput.trim())
+                        settingsStore.saveArkKey(arkInput.trim())
+                        SocialApiClient.amapKey = amapInput.trim()
+                        SocialApiClient.arkKey = arkInput.trim()
+                        showApiKeySettings = false
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showApiKeySettings = false }) { Text("取消") } }
         )
     }
 

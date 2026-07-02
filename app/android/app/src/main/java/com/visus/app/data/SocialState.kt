@@ -163,6 +163,19 @@ object SocialState {
         _recentEmergencies.value = listOf(event) + _recentEmergencies.value.take(49)
     }
 
+    // Unread private messages
+    private val _unreadCount = MutableStateFlow(0)
+    val unreadCount: StateFlow<Int> = _unreadCount.asStateFlow()
+
+    fun loadUnreadCount() {
+        scope.launch {
+            try {
+                val resp = SocialApiClient.get("/api/messages/unread")
+                _unreadCount.value = resp.optJSONObject("data")?.optInt("unread", 0) ?: 0
+            } catch (_: Exception) {}
+        }
+    }
+
     /**
      * Update a friend's status in the local list (called from WebSocket updates).
      */

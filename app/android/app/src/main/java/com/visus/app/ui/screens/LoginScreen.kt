@@ -33,6 +33,7 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
     var firstName by remember { mutableStateOf("") }
     var lastName by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var userType by remember { mutableStateOf("blind") }
     var errorText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
@@ -178,6 +179,47 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.height(12.dp))
+                // User type selection
+                Text("选择身份:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Card(
+                        modifier = Modifier.weight(1f).height(80.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (userType == "blind") MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        onClick = { userType = "blind" }
+                    ) {
+                        Column(Modifier.fillMaxSize().padding(8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center) {
+                            Text("🧑‍🦯", fontSize = 24.sp)
+                            Text("我是盲人", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Card(
+                        modifier = Modifier.weight(1f).height(80.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (userType == "family") MaterialTheme.colorScheme.tertiaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        onClick = { userType = "family" }
+                    ) {
+                        Column(Modifier.fillMaxSize().padding(8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center) {
+                            Text("👨‍👩‍👧", fontSize = 24.sp)
+                            Text("我是家属", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
             }
 
             OutlinedTextField(
@@ -238,13 +280,13 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                         try {
                             if (isLogin) {
                                 val (token, user) = SocialApiClient.login(email.trim(), password)
-                                AuthState.saveLogin(token, user.id, user.email, user.firstName, user.lastName)
+                                AuthState.saveLogin(token, user.id, user.email, user.firstName, user.lastName, user.userType)
                             } else {
                                 val (token, user) = SocialApiClient.signup(
                                     email.trim(), password,
-                                    firstName.trim(), lastName.trim()
+                                    firstName.trim(), lastName.trim(), userType
                                 )
-                                AuthState.saveLogin(token, user.id, user.email, user.firstName, user.lastName)
+                                AuthState.saveLogin(token, user.id, user.email, user.firstName, user.lastName, userType)
                             }
                             onLoginSuccess()
                         } catch (e: Exception) {

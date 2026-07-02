@@ -16,8 +16,12 @@ class SettingsDataStore(private val context: Context) {
     companion object {
         val SERVER_IP = stringPreferencesKey("server_ip")
         val SERVER_PORT = stringPreferencesKey("server_port")
+        val AMAP_KEY = stringPreferencesKey("amap_key")
+        val ARK_KEY = stringPreferencesKey("ark_key")
         val DEFAULT_IP = "10.0.2.2"
         val DEFAULT_PORT = "8081"
+        val DEFAULT_AMAP_KEY = ""  // empty = use server default
+        val DEFAULT_ARK_KEY = ""   // empty = use server default
     }
 
     val serverIp: Flow<String> = context.dataStore.data.map { preferences ->
@@ -45,4 +49,10 @@ class SettingsDataStore(private val context: Context) {
             preferences[SERVER_PORT] = port
         }
     }
+
+    val amapKey: Flow<String> = context.dataStore.data.map { it[AMAP_KEY] ?: DEFAULT_AMAP_KEY }
+    val arkKey: Flow<String> = context.dataStore.data.map { it[ARK_KEY] ?: DEFAULT_ARK_KEY }
+
+    suspend fun saveAmapKey(key: String) { context.dataStore.edit { it[AMAP_KEY] = key } }
+    suspend fun saveArkKey(key: String) { context.dataStore.edit { it[ARK_KEY] = key } }
 }

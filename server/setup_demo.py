@@ -6,17 +6,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from social.database import init_db, SessionLocal, User, SafetyAlert, Friendship
 
 DEMO_USERS = [
-    ("alice@demo.com", "demo123", "Alice", "Wang"),
-    ("bob@demo.com", "demo123", "Bob", "Li"),
-    ("carol@demo.com", "demo123", "Carol", "Zhang"),
-    ("dave@demo.com", "demo123", "Dave", "Liu"),
-    ("eve@demo.com", "demo123", "Eve", "Chen"),
-    ("frank@demo.com", "demo123", "Frank", "Yang"),
-    ("grace@demo.com", "demo123", "Grace", "Zhao"),
-    ("henry@demo.com", "demo123", "Henry", "Huang"),
-    ("ivy@demo.com", "demo123", "Ivy", "Wu"),
-    ("jack@demo.com", "demo123", "Jack", "Zhou"),
-    ("newuser@demo.com", "demo123", "New", "User"),
+    # Blind users
+    ("alice@demo.com", "demo123", "Alice", "Wang", "blind"),
+    ("bob@demo.com", "demo123", "Bob", "Li", "blind"),
+    ("carol@demo.com", "demo123", "Carol", "Zhang", "blind"),
+    ("eve@demo.com", "demo123", "Eve", "Chen", "blind"),
+    ("grace@demo.com", "demo123", "Grace", "Zhao", "blind"),
+    ("henry@demo.com", "demo123", "Henry", "Huang", "blind"),
+    ("jack@demo.com", "demo123", "Jack", "Zhou", "blind"),
+    # Family/caregiver users
+    ("dave@demo.com", "demo123", "Dave", "Liu", "family"),
+    ("frank@demo.com", "demo123", "Frank", "Yang", "family"),
+    ("ivy@demo.com", "demo123", "Ivy", "Wu", "family"),
+    # New test user (blind)
+    ("newuser@demo.com", "demo123", "New", "User", "blind"),
 ]
 
 def setup():
@@ -32,12 +35,13 @@ def setup():
             return
 
         users = []
-        for email, password, first, last in DEMO_USERS:
+        for email, password, first, last, utype in DEMO_USERS:
             user = User(
                 username=email,
                 email=email,
                 first_name=first,
                 last_name=last,
+                user_type=utype,
             )
             user.set_password(password)
             db.add(user)

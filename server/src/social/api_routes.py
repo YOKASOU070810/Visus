@@ -24,6 +24,7 @@ class SignupRequest(BaseModel):
     password: str
     first_name: str = ""
     last_name: str = ""
+    user_type: str = "blind"  # "blind" or "family"
 
 class StatusUpdateRequest(BaseModel):
     status: bool = True
@@ -94,6 +95,7 @@ async def api_signup(body: SignupRequest):
             email=body.email,
             first_name=body.first_name,
             last_name=body.last_name,
+            user_type=body.user_type,
         )
         user.set_password(body.password)
         db.add(user)
@@ -129,6 +131,23 @@ async def api_profile(request: Request):
         return api_ok({
             "user": user.to_dict(),
             "status": latest.to_dict() if latest else None,
+        })
+    finally:
+        db.close()
+
+
+@router.post("/profile/switch-mode")
+async def api_switch_mode(request: Request):
+    """Switch user type between blind and family. Persists in database."""
+    user = get_current_user(request)
+    db = SessionLocal()
+    try:
+        new_type = "blind" if user.user_type == "family" else "family"
+        db.query(User).filter(User.id == user.id).update({"user_type": new_type})
+        db.commit()
+        return api_ok({
+            "user_type": new_type,
+            "message": f"Switched to {new_type} mode"
         })
     finally:
         db.close()

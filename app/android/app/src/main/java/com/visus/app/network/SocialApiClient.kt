@@ -17,6 +17,8 @@ object SocialApiClient {
     private const val TAG = "SocialApiClient"
     private var baseUrl: String = "http://10.0.2.2:8081"
     private var authToken: String? = null
+    var amapKey: String = ""
+    var arkKey: String = ""
 
     fun setServer(url: String) { baseUrl = url.trimEnd('/') }
     fun getServer(): String = baseUrl
@@ -27,7 +29,8 @@ object SocialApiClient {
     // ── Data classes ──
     data class UserInfo(
         val id: Int, val username: String, val email: String,
-        val firstName: String, val lastName: String
+        val firstName: String, val lastName: String,
+        val userType: String = "blind"
     )
     data class FriendInfo(
         val user: UserInfo, val status: Boolean?, val alertType: String?,
@@ -47,7 +50,7 @@ object SocialApiClient {
     data class ApiResult<T>(val success: Boolean, val data: T?, val error: String?)
 
     // ── HTTP helpers ──
-    private suspend fun post(path: String, body: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun post(path: String, body: JSONObject, token: String? = authToken): JSONObject = withContext(Dispatchers.IO) {
         val url = URL("$baseUrl$path")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -55,7 +58,9 @@ object SocialApiClient {
         conn.setRequestProperty("Accept", "application/json")
         conn.connectTimeout = 8000
         conn.readTimeout = 8000
-        authToken?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+        token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+        if (amapKey.isNotBlank()) conn.setRequestProperty("X-Visus-AMAP-Key", amapKey)
+        if (arkKey.isNotBlank()) conn.setRequestProperty("X-Visus-ARK-Key", arkKey)
 
         conn.doOutput = true
         OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
@@ -73,14 +78,16 @@ object SocialApiClient {
         JSONObject(text)
     }
 
-    private suspend fun get(path: String): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun get(path: String, token: String? = authToken): JSONObject = withContext(Dispatchers.IO) {
         val url = URL("$baseUrl$path")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.setRequestProperty("Accept", "application/json")
         conn.connectTimeout = 8000
         conn.readTimeout = 8000
-        authToken?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+        token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+        if (amapKey.isNotBlank()) conn.setRequestProperty("X-Visus-AMAP-Key", amapKey)
+        if (arkKey.isNotBlank()) conn.setRequestProperty("X-Visus-ARK-Key", arkKey)
 
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -95,7 +102,8 @@ object SocialApiClient {
     private fun parseUser(obj: JSONObject) = UserInfo(
         id = obj.getInt("id"), username = obj.optString("username"),
         email = obj.optString("email"), firstName = obj.optString("first_name", ""),
-        lastName = obj.optString("last_name", "")
+        lastName = obj.optString("last_name", ""),
+        userType = obj.optString("user_type", "blind")
     )
 
     private fun parseFriend(obj: JSONObject): FriendInfo {
@@ -126,12 +134,13 @@ object SocialApiClient {
         return Pair(token, user)
     }
 
-    suspend fun signup(email: String, password: String, firstName: String, lastName: String): Pair<String, UserInfo> {
+    suspend fun signup(email: String, password: String, firstName: String, lastName: String, userType: String = "blind"): Pair<String, UserInfo> {
         val body = JSONObject().apply {
             put("email", email)
             put("password", password)
             put("first_name", firstName)
             put("last_name", lastName)
+            put("user_type", userType)
         }
         val resp = post("/api/signup/", body)
         val data = resp.getJSONObject("data")
