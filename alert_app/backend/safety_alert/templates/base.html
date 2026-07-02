@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Safety Alert - Stay informed about your safety status and that of your friends.">
+    <title>{% block title %}Safety Alert{% endblock %}</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+</head>
+<body>
+    <header>
+        <nav role="navigation" aria-label="Main Navigation">
+            <ul>
+                {% if user.is_authenticated %}
+                    <li><a href="{% url 'home' %}">Home</a></li>
+                    <li>
+                        <a href="{% url 'pending_friend_requests' %}">
+                            Pending Requests
+                            {% if pending_requests_count > 0 %}
+                                <span class="pending-count">({{ pending_requests_count }})</span>
+                            {% endif %}
+                        </a>
+                    </li>
+                    <li><a href="{% url 'search_users' %}">Search Friends</a></li>
+                    <li><a href="{% url 'profile' %}">Profile</a></li>
+                    <li><a href="{% url 'logout' %}" onclick="event.preventDefault(); document.getElementById('logout-form').submit();">Logout</a></li>
+                <form id="logout-form" action="{% url 'logout' %}" method="POST" style="display: none;">
+                    {% csrf_token %}
+                </form>
+                {% else %}
+                <li><a href="{% url 'login' %}">Login</a></li>
+                {% endif %}
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        {% if user.is_authenticated %}
+        <h2>Mark Your Safety Status</h2>
+        <form id="safety-status-form" method="post" action="{% url 'update_safety_status' %}" class="safety-status-form">
+            {% csrf_token %}
+            <div class="safety-toggle-group">
+                <button type="button" id="btn-safe" class="safety-toggle-btn safe-active"
+                        onclick="selectSafetyStatus(true)">I'm Safe</button>
+                <button type="button" id="btn-unsafe" class="safety-toggle-btn"
+                        onclick="selectSafetyStatus(false)">Need Help!</button>
+            </div>
+
+            <input type="hidden" name="status" id="safety-status-value" value="true">
+            <input type="hidden" name="city" id="city" value="">
+            <input type="hidden" name="latitude" id="latitude">
+            <input type="hidden" name="longitude" id="longitude">
+
+            <button type="submit" class="btn-primary">Send Alert</button>
+        </form>
+        {% endif %}
+    {% block content %}
+    {% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2024 AlertBuddy. All rights reserved.</p>
+    </footer>
+
+<script src="{% static 'js/app.js' %}">
+    getLocation()
+</script>
+</body>
+</html>

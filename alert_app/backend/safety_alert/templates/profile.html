@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+<div class="card profile-card">
+    <h2 class="mb-2">{{ user.first_name }} {{ user.last_name }}'s Profile</h2>
+
+    {% if user.profile.profile_image %}
+        <img src="{{ user.profile.profile_image.url }}" alt="Profile Image" class="profile-image" />
+    {% else %}
+        <div class="profile-image" style="background-color: #ccc; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 3rem; color: #fff;">{{ user.username|first|upper }}</span>
+        </div>
+    {% endif %}
+
+    <div class="profile-info">
+        <p><strong>Full name:</strong> {{ user.first_name }} {{ user.last_name }}</p>
+        <p><strong>Email:</strong> {{ user.email }}</p>
+        <p><strong>Last Location:</strong> {{ city }}</p>
+        <p><strong>Last Status:</strong> {{ status }}</p>
+        <p><strong>Last Update:</strong>
+            {% if latest_alert %}
+                {{ latest_alert.last_updated|date:"F j, Y, g:i a" }}
+            {% else %}
+                Not marked yet
+            {% endif %}
+        </p>
+    </div>
+
+    <a href="{% url 'edit_profile' %}" class="edit-profile-btn">Edit Profile</a>
+</div>
+{% endblock %}

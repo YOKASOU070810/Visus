@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Home{% endblock %}
+{% block content %}
+    <h2>Your Friends' Safety Status</h2>
+
+    <div class="friend-feed">
+    {% for friend, info in friends.items %}
+        <div class="friend-card {% if info.status is True %}safe{% elif info.status is False %}unsafe{% else %}no-status{% endif %}">
+            <div class="friend-card-header">
+                {% if friend.profile.profile_image %}
+                    <img src="{{ friend.profile.profile_image.url }}" alt="{{ friend.username }}" class="friend-card-image">
+                {% else %}
+                    <div class="friend-card-image"></div>
+                {% endif %}
+                <div class="friend-card-info">
+                    <div class="friend-card-name">{{ info.full_name }}</div>
+                    <div class="friend-card-status">
+                        {% if info.status is True %}
+                            Safe
+                        {% elif info.status is False %}
+                            Not Safe
+                        {% else %}
+                            No Status
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="friend-card-update">
+                <p>Last location: {{ info.city | default:"Unknown" }}</p>
+                <p>Last update: {{ info.last_alert_time|date:"F j, Y, g:i a" |default:"Never" }}</p>
+            </div>
+        </div>
+    {% empty %}
+    <p>You have no friends yet</p>
+    {% endfor %}
+</div>
+{% endblock %}

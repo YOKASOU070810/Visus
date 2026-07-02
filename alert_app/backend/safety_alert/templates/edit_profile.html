@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block content %}
+<div class="edit-profile-form">
+    <h2>Edit Profile</h2>
+
+    {% if profile_form.errors %}
+        <div class="error-messages">
+            {{ profile_form.errors }}
+        </div>
+    {% endif %}
+
+    <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="profile-image-container">
+            {% if user.profile.profile_image %}
+                <img src="{{ user.profile.profile_image.url }}" alt="Profile Image" class="edit-profile-image" id="profile-image-preview">
+            {% else %}
+                <img src="/media/profile_images/default-no-profile-image.png" alt="Default Profile Image" class="edit-profile-image" id="profile-image-preview">
+            {% endif %}
+            <label for="profile_image" class="edit-profile-image-label">
+                <i class="fas fa-camera"></i>
+            </label>
+            <input type="file" id="profile_image" name="profile_image" class="edit-profile-image-input" accept="image/*">
+            <button type="button" id="upload-button" class="btn-primary">Upload Image</button>
+        </div>
+
+        <div class="edit-profile-info">
+            <label for="first_name">First name:</label>
+            <input type="text" id="first_name" name="first_name" value="{{ user.first_name }}" required>
+
+            <label for="last_name">Last name:</label>
+            <input type="text" id="last_name" name="last_name" value="{{ user.last_name }}" required>
+        </div>
+
+        <button type="submit" class="edit-profile-btn">Save Changes</button>
+    </form>
+</div>
+
+<script src="{% static 'js/app.js' %}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeProfileImageUpload();
+    });
+</script>
+{% endblock %}

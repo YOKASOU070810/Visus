@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AlertBuddy</string>
+    <string name="main_status">框架已启动，等待接入功能模块</string>
+</resources>
+
