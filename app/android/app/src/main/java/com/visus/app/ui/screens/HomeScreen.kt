@@ -32,8 +32,10 @@ import com.visus.app.data.AuthState
 import com.visus.app.data.SettingsDataStore
 import com.visus.app.data.SocialState
 import com.visus.app.data.StreamingUiState
+import com.visus.app.network.EmergencyAlertEvent
 import com.visus.app.network.SocialApiClient
 import com.visus.app.network.SocialWebSocketClient
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class HomeTab(val label: String, val icon: ImageVector) {
@@ -59,15 +61,13 @@ fun HomeScreen(
         if (userType == "blind")
             listOf(HomeTab.NAVIGATION, HomeTab.FRIENDS, HomeTab.AGENT, HomeTab.ALERTS, HomeTab.PROFILE)
         else
-            listOf(HomeTab.FRIENDS, HomeTab.ALERTS, HomeTab.PROFILE)  // Family: simpler, focused on monitoring
+            listOf(HomeTab.FRIENDS, HomeTab.ALERTS, HomeTab.PROFILE)
     }
     val defaultTab = if (userType == "blind") HomeTab.AGENT else HomeTab.FRIENDS
-    val familyTab = if (userType == "family") HomeTab.FRIENDS else null
     var selectedTab by remember { mutableStateOf(defaultTab) }
-    var showAgentOverlay by remember { mutableStateOf(false) }
     var showRequestsDialog by remember { mutableStateOf(false) }
-    var friendSubTab by remember { mutableStateOf(0) } // 0=friends, 1=groups
-    var navSubTab by remember { mutableStateOf(0) }    // 0=stream, 1=map
+    var friendSubTab by remember { mutableStateOf(0) }
+    var navSubTab by remember { mutableStateOf(0) }
 
     // Streaming state
     val streaming by StreamingUiState.isStreaming.collectAsState()
@@ -78,6 +78,11 @@ fun HomeScreen(
     val serverIp by settingsDataStore.serverIp.collectAsState(initial = SettingsDataStore.DEFAULT_IP)
     val serverPort by settingsDataStore.serverPort.collectAsState(initial = SettingsDataStore.DEFAULT_PORT)
 
+    // Emergency popup state
+    var emergencyPopup by remember { mutableStateOf<EmergencyAlertEvent?>(null) }
+    val recentEmergencies by SocialState.recentEmergencies.collectAsState()
+    val lastEmergencyId = remember { mutableStateOf("") }
+
     // Social WebSocket
     val wsClient = remember { SocialWebSocketClient() }
     LaunchedEffect(AuthState.token.value) {
@@ -85,14 +90,23 @@ fun HomeScreen(
     }
     LaunchedEffect(Unit) {
         launch { wsClient.statusUpdates.collect { SocialState.updateFriendStatus(it.userId, it.status, it.alertType, it.note, it.city, it.lastUpdated) } }
-        launch { wsClient.emergencyAlerts.collect { SocialState.addEmergencyEvent(it) } }
+        launch {
+            wsClient.emergencyAlerts.collect { alert ->
+                SocialState.addEmergencyEvent(alert)
+                // Show emergency popup for all emergencies
+                val alertKey = "${alert.userId}_${alert.createdAt}"
+                if (alertKey != lastEmergencyId.value) {
+                    lastEmergencyId.value = alertKey
+                    emergencyPopup = alert
+                }
+            }
+        }
         launch { wsClient.friendRequests.collect { SocialState.loadRequests() } }
     }
     LaunchedEffect(serverIp, serverPort) {
         SocialApiClient.setServer("http://$serverIp:$serverPort")
         val token = AuthState.token.value
         token?.let { SocialApiClient.setToken(it) }
-        // Start emergency notification service (listens for SOS in background)
         if (token != null) {
             try {
                 com.visus.app.service.EmergencyNotificationService.start(
@@ -103,15 +117,13 @@ fun HomeScreen(
             }
         }
     }
-    // Periodic unread count check
     val unread by SocialState.unreadCount.collectAsState()
     LaunchedEffect(Unit) {
         while (true) {
-            SocialState.loadUnreadCount()
-            kotlinx.coroutines.delay(5000)
+            try { SocialState.loadUnreadCount() } catch (_: Exception) {}
+            kotlinx.coroutines.delay(15000)
         }
     }
-    // Load API keys from settings
     val amapKeySaved by settingsDataStore.amapKey.collectAsState(initial = "")
     val arkKeySaved by settingsDataStore.arkKey.collectAsState(initial = "")
     LaunchedEffect(amapKeySaved, arkKeySaved) {
@@ -131,7 +143,7 @@ fun HomeScreen(
                                 BadgedBox(badge = {
                                     when {
                                         tab == HomeTab.FRIENDS && unread > 0 -> Badge { Text("$unread") }
-                                        tab == HomeTab.ALERTS && SocialState.recentEmergencies.collectAsState().value.isNotEmpty() -> Badge { Text("${SocialState.recentEmergencies.collectAsState().value.size}") }
+                                        tab == HomeTab.ALERTS && recentEmergencies.isNotEmpty() -> Badge { Text("${recentEmergencies.size}") }
                                     }
                                 }) {
                                     Icon(tab.icon, contentDescription = tab.label,
@@ -186,7 +198,7 @@ fun HomeScreen(
             }
         }
 
-        // AI FAB - visible on all tabs for blind users (switches to AGENT tab)
+        // AI FAB
         if (userType == "blind" && selectedTab != HomeTab.AGENT) {
             FloatingActionButton(
                 onClick = { selectedTab = HomeTab.AGENT },
@@ -198,32 +210,70 @@ fun HomeScreen(
                 Text("🤖", fontSize = 24.sp)
             }
         }
-    }
 
-    // Friend Requests Dialog (shared)
-    if (showRequestsDialog) {
-        val reqs by SocialState.requests.collectAsState()
-        AlertDialog(
-            onDismissRequest = { showRequestsDialog = false },
-            title = { Text("好友请求") },
-            text = {
-                LazyColumn(modifier = Modifier.height(300.dp)) {
-                    items(reqs) { req ->
-                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(req.sender?.let { "${it.firstName} ${it.lastName}" } ?: "Unknown", fontWeight = FontWeight.Medium)
-                                    Text(req.sender?.email ?: "", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // ── Emergency SOS Popup ──
+        if (emergencyPopup != null) {
+            val alert = emergencyPopup!!
+            AlertDialog(
+                onDismissRequest = { emergencyPopup = null },
+                icon = { Text("🆘", fontSize = 36.sp) },
+                title = { Text("${alert.userName} 发来SOS求助！", fontWeight = FontWeight.Bold, color = Color(0xFFE63946)) },
+                text = {
+                    Column {
+                        Text("用户：${alert.userName}", fontSize = 15.sp)
+                        Text("邮箱：${alert.userEmail}", fontSize = 13.sp, color = Color.Gray)
+                        if (!alert.description.isNullOrBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text("详情：${alert.description}", fontSize = 14.sp)
+                        }
+                        if (!alert.city.isNullOrBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("📍 ${alert.city}", fontSize = 13.sp, color = Color.Gray)
+                        }
+                        if (!alert.createdAt.isNullOrBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("时间：${alert.createdAt?.take(19)?.replace("T", " ")}", fontSize = 12.sp, color = Color.LightGray)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { emergencyPopup = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE63946))
+                    ) { Text("我已知道", color = Color.White) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { emergencyPopup = null }) { Text("关闭") }
+                },
+                containerColor = Color(0xFFFFF3E0)
+            )
+        }
+
+        // Friend Requests Dialog
+        if (showRequestsDialog) {
+            val reqs by SocialState.requests.collectAsState()
+            AlertDialog(
+                onDismissRequest = { showRequestsDialog = false },
+                title = { Text("好友请求") },
+                text = {
+                    LazyColumn(modifier = Modifier.height(300.dp)) {
+                        items(reqs) { req ->
+                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(req.sender?.let { "${it.firstName} ${it.lastName}" } ?: "Unknown", fontWeight = FontWeight.Medium)
+                                        Text(req.sender?.email ?: "", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    TextButton(onClick = { SocialState.respondRequest(req.id, true) }) { Text("批准") }
+                                    TextButton(onClick = { SocialState.respondRequest(req.id, false) }) { Text("拒绝") }
                                 }
-                                TextButton(onClick = { SocialState.respondRequest(req.id, true) }) { Text("批准") }
-                                TextButton(onClick = { SocialState.respondRequest(req.id, false) }) { Text("拒绝") }
                             }
                         }
                     }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showRequestsDialog = false }) { Text("关闭") } }
-        )
+                },
+                confirmButton = { TextButton(onClick = { showRequestsDialog = false }) { Text("关闭") } }
+            )
+        }
     }
 }
 
@@ -235,7 +285,7 @@ fun AgentChatContent() {
     var status by remember { mutableStateOf("有什么需要帮助的？") }
     var reply by remember { mutableStateOf("") }
     val ctx = LocalContext.current
-    val tts = remember { TextToSpeech(ctx) { status -> if (status != TextToSpeech.SUCCESS) {} } }
+    val tts = remember { TextToSpeech(ctx) { s -> if (s != TextToSpeech.SUCCESS) {} } }
 
     fun send(text: String) {
         if (text.isBlank()) return
@@ -282,7 +332,7 @@ fun AgentScreenOverlay() {
     }
 }
 
-// ── Navigation Tab (streaming + settings) ──
+// ── Navigation Tab ──
 @Composable
 fun NavigationTab(
     streaming: Boolean, connectionStatus: String, serverIp: String, serverPort: String,
@@ -308,28 +358,43 @@ fun NavigationTab(
             if (latestFrame != null) Image(latestFrame.asImageBitmap(), "preview", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Text(if (streaming) "正在打开相机" else "未开始推流", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp)
         }
-        Card(Modifier.fillMaxWidth().weight(0.54f), shape = RoundedCornerShape(12.dp)) {
-            Column(Modifier.fillMaxSize().padding(12.dp)) {
-                Text("语音文字", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(partialText, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                LazyColumn(Modifier.fillMaxSize()) {
-                    if (finalMessages.isEmpty()) item { Text("还没有识别结果", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)) }
-                    else items(finalMessages.asReversed()) { msg -> Text(msg, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface) }
+        Button(
+            onClick = { if (streaming) onStopStreaming() else onStartStreaming() },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (streaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(if (streaming) Icons.Default.Stop else Icons.Default.PlayArrow, null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (streaming) "停止辅助出行" else "开始辅助出行", fontSize = 16.sp)
+        }
+        // AI voice messages display
+        Column(Modifier.fillMaxWidth().weight(0.46f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp)) {
+            Text("AI 语音播报", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(Modifier.height(4.dp))
+            if (finalMessages.isEmpty() && partialText.isBlank())
+                Text("等待语音输入…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+            else {
+                if (partialText.isNotBlank()) Text("[识别中] $partialText", color = Color.Gray, fontSize = 13.sp)
+                LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(finalMessages.takeLast(10)) { msg -> Text(msg, fontSize = 14.sp) }
                 }
             }
         }
-        Button(onClick = { if (streaming) onStopStreaming() else onStartStreaming() }, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(27.dp), colors = ButtonDefaults.buttonColors(containerColor = if (streaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)) {
-            Icon(if (streaming) Icons.Default.VideocamOff else Icons.Default.Videocam, null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (streaming) "停止推流" else "开始推流", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (showSettings) {
+            AlertDialog(
+                onDismissRequest = { showSettings = false },
+                title = { Text("服务器设置") },
+                text = {
+                    Column {
+                        OutlinedTextField(ipInput, { ipInput = it }, label = { Text("IP地址") }, singleLine = true)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(portInput, { portInput = it }, label = { Text("端口") }, singleLine = true)
+                    }
+                },
+                confirmButton = { TextButton(onClick = { onSaveServer(ipInput.trim(), portInput.trim()); showSettings = false }) { Text("保存") } },
+                dismissButton = { TextButton(onClick = { showSettings = false }) { Text("取消") } }
+            )
         }
-        Spacer(Modifier.height(2.dp))
     }
-    if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("服务器设置") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            OutlinedTextField(ipInput, { ipInput = it }, label = { Text("IP") }, singleLine = true)
-            OutlinedTextField(portInput, { portInput = it }, label = { Text("端口") }, singleLine = true)
-        }
-    }, confirmButton = { TextButton(onClick = { onSaveServer(ipInput.trim(), portInput.trim()); showSettings = false }) { Text("保存") } }, dismissButton = { TextButton(onClick = { showSettings = false }) { Text("取消") } })
 }

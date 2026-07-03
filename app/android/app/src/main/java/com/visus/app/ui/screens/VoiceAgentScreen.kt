@@ -58,7 +58,9 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
     var messages by remember { mutableStateOf(listOf<VoiceMessage>()) }
     val listState = rememberLazyListState()
 
-    val recognizer = remember { SpeechRecognizer.createSpeechRecognizer(ctx) }
+    val recognizer = remember {
+        try { SpeechRecognizer.createSpeechRecognizer(ctx) } catch (_: Exception) { null }
+    }
     val recognizerIntent = remember {
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -82,15 +84,23 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
         scope.launch { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
     }
 
+    // Speech availability check (must be before helpers that use it)
+    val isSpeechAvailable = remember {
+        try { SpeechRecognizer.isRecognitionAvailable(ctx) && recognizer != null } catch (_: Exception) { false }
+    }
+    var showTextInput by remember { mutableStateOf(false) }
+    var textInput by remember { mutableStateOf("") }
+
     // ── Helpers (defined first for closure capture) ──
     fun doStartListening() {
+        if (!isSpeechAvailable) { showTextInput = true; return }
         if (!isListening && !isThinking && !isSpeaking) {
-            try { recognizer.startListening(recognizerIntent) } catch (_: Exception) { statusText = "请授予麦克风权限" }
+            try { recognizer?.startListening(recognizerIntent) } catch (_: Exception) { statusText = "语音不可用，请打字"; showTextInput = true }
         }
     }
 
     fun doStopListening() {
-        try { recognizer.stopListening() } catch (_: Exception) {}
+        try { recognizer?.stopListening() } catch (_: Exception) {}
         isListening = false
     }
 
@@ -184,8 +194,8 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
             }
             override fun onEvent(e: Int, p: Bundle?) {}
         }
-        recognizer.setRecognitionListener(listener)
-        onDispose { recognizer.setRecognitionListener(null) }
+        recognizer?.setRecognitionListener(listener)
+        onDispose { recognizer?.setRecognitionListener(null) }
     }
 
     // ── TTS init ──
@@ -211,16 +221,20 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
 
     // ── Auto-start listening after greeting ──
     LaunchedEffect(greetingDone, isSpeaking) {
-        if (greetingDone && !isSpeaking && !isThinking && !isListening) { delay(2200); doStartListening() }
+        if (greetingDone && !isSpeaking && !isThinking && !isListening) {
+            delay(2500)
+            if (isSpeechAvailable) doStartListening()
+            else showTextInput = true
+        }
     }
 
     // ── Cleanup ──
     DisposableEffect(Unit) {
-        onDispose { doStopListening(); recognizer.destroy(); tts?.stop(); tts?.shutdown() }
+        onDispose { doStopListening(); try { recognizer?.destroy() } catch (_: Exception) {}; tts?.stop(); tts?.shutdown() }
     }
 
     val hasMicPermission = ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
+    // Check if SpeechRecognizer is available
     // ═══════════════ UI ═══════════════
     Box(Modifier.fillMaxSize().background(
         Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF0F172A)))
@@ -281,6 +295,30 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
                             }
                         }
                     }
+                }
+            }
+
+            // Text input fallback (for phones without Google Speech)
+            if (showTextInput || !isSpeechAvailable) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = textInput, onValueChange = { textInput = it },
+                        placeholder = { Text("输入消息...", color = Color(0xFF94A3B8)) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF6366F1), unfocusedBorderColor = Color(0xFF475569)
+                        )
+                    )
+                    IconButton(onClick = {
+                        if (textInput.isNotBlank()) { handleUserInput(textInput.trim()); textInput = "" }
+                    }) {
+                        Icon(Icons.Default.Send, "发送", tint = Color(0xFF6366F1))
+                    }
+                }
+                if (!isSpeechAvailable) {
+                    Text("语音识别不可用，请使用文字输入", color = Color(0xFFF59E0B), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
                 }
             }
 

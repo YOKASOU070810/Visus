@@ -1037,6 +1037,8 @@ async def start_ai_with_text(user_text: str):
         visual_jpeg = get_latest_camera_jpeg()
         if visual_jpeg is None:
             print("[AI] visual request without fresh camera frame; continuing text-only", flush=True)
+            attach_image_request = False
+            visual_jpeg = None
 
     def _to_stream_pcm(audio_bytes: bytes, rate_state):
         if not audio_bytes:
@@ -1122,7 +1124,7 @@ async def start_ai_with_text(user_text: str):
         content_list = [{
             "type": "text",
             "text": (
-                "以下是用户当前语音请求。请遵循系统提示词，为视力障碍用户提供出行辅助，回答适合语音播报。"
+                "你是Visus，专为视力障碍人士设计的AI助手。请用中文简洁回复，适合语音播报，1-2句话。"
             )
         }]
         attach_image = attach_image_request
@@ -1136,7 +1138,7 @@ async def start_ai_with_text(user_text: str):
                 })
                 print(f"[AI] attach_image=true jpeg={len(visual_jpeg)} compressed={len(small_jpeg)}", flush=True)
             except Exception as e:
-                print(f"[AI GUARD] image attach failed: {repr(e)}", flush=True)
+                print(f"[AI] image attach failed: {repr(e)}, continuing text-only", flush=True)
                 attach_image = False
         else:
             print("[AI] attach_image=false", flush=True)
@@ -1836,17 +1838,18 @@ async def ws_camera_mobile(ws: WebSocket):
         except Exception:
             pass
         mobile_camera_ws = None
+        # Close all viewers when camera disconnects
+        for viewer_ws in list(camera_viewers):
+            try: await viewer_ws.close(code=1000, reason="camera offline")
+            except Exception: pass
+        camera_viewers.clear()
         if safety_monitor_task and not safety_monitor_task.done():
             safety_monitor_task.cancel()
-            try:
-                await safety_monitor_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            try: await safety_monitor_task
+            except (asyncio.CancelledError, Exception): pass
         safety_monitor_task = None
-        print("[CAMERA] Mobile client disconnected")
-        
+        print("[CAMERA] Mobile client disconnected, viewers cleaned")
+
         # 【新增】清理导航状态
         if blind_path_navigator:
             blind_path_navigator.reset()
@@ -1864,14 +1867,13 @@ async def ws_viewer(ws: WebSocket):
     print(f"[VIEWER] Browser connected. Total viewers: {len(camera_viewers)}", flush=True)
     try:
         while True:
-            # 保持连接活跃
             await asyncio.sleep(60)
     except WebSocketDisconnect:
         print("[VIEWER] Browser disconnected", flush=True)
     finally:
-        try: 
+        try:
             camera_viewers.remove(ws)
-        except Exception: 
+        except Exception:
             pass
         print(f"[VIEWER] Removed. Total viewers: {len(camera_viewers)}", flush=True)
 
@@ -1912,6 +1914,7 @@ async def on_startup_register_bridge_sender():
                     try:
                         camera_viewers.remove(ws)
                     except Exception:
+                        pass
                         pass
             
             # 使用保存的主线程事件循环

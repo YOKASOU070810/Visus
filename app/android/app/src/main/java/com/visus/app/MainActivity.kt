@@ -55,6 +55,9 @@ class MainActivity : ComponentActivity() {
         // Initialize auth state (restore saved session)
         AuthState.init(applicationContext)
 
+        // Start location reporting for blind users (safe init, won't crash)
+        try { com.visus.app.service.LocationReportService.init(this) } catch (_: Exception) {}
+
         setContent {
             VisusTheme {
                 Surface(
@@ -115,6 +118,8 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.POST_NOTIFICATIONS,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
         )
         val missing = permissions.any {
             ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
