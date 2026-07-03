@@ -376,26 +376,6 @@ atexit.register(cleanup_on_exit)  # 正常退出时也调用
 
 print("[RECORDER] 已注册退出处理器 - Ctrl+C时会自动保存录制文件")
 
-
-
-# 【新增】预加载红绿灯检测模型（避免进入WAIT_TRAFFIC_LIGHT状态时卡顿）
-try:
-    import trafficlight_detection
-    print("[TRAFFIC_LIGHT] 开始预加载红绿灯检测模型...")
-    if trafficlight_detection.init_model():
-        print("[TRAFFIC_LIGHT] 红绿灯检测模型预加载成功")
-        # 执行一次测试推理，完全预热模型
-        try:
-            test_img = np.zeros((640, 640, 3), dtype=np.uint8)
-            _ = trafficlight_detection.process_single_frame(test_img)
-            print("[TRAFFIC_LIGHT] 模型预热完成")
-        except Exception as e:
-            print(f"[TRAFFIC_LIGHT] 模型预热失败: {e}")
-    else:
-        print("[TRAFFIC_LIGHT] 红绿灯检测模型预加载失败")
-except Exception as e:
-    print(f"[TRAFFIC_LIGHT] 红绿灯模型预加载出错: {e}")
-
 # ============== 关键：系统级"硬重置"总闸 =================
 interrupt_lock = asyncio.Lock()
 
@@ -831,10 +811,9 @@ async def start_ai_with_text_custom(user_text: str):
     """扩展版的AI启动函数，支持识别特殊命令"""
     global navigation_active, blind_path_navigator, cross_street_active, cross_street_navigator, orchestrator
     
-    # 【修改】在导航模式和红绿灯检测模式下，只有特定词才进入omni对话
+    # 导航模式下只有特定词才进入 omni 对话，避免导航语音误触发普通 AI。
     if orchestrator:
         current_state = orchestrator.get_state()
-        # 如果在导航模式或红绿灯检测模式（非CHAT模式）
         if current_state not in ["CHAT", "IDLE"]:
             # 检查是否是允许的对话触发词
             allowed_keywords = ["帮我看", "帮我看下", "帮我找", "找一下", "看看", "识别一下"]
@@ -842,13 +821,12 @@ async def start_ai_with_text_custom(user_text: str):
             
             # 检查是否是导航控制命令
             nav_control_keywords = ["开始过马路", "过马路结束", "开始导航", "盲道导航", "停止导航", "结束导航", 
-                                   "检测红绿灯", "看红绿灯", "停止检测", "停止红绿灯"]
+                                   "停止检测"]
             is_nav_control = any(keyword in user_text for keyword in nav_control_keywords)
             
             # 如果既不是允许的查询，也不是导航控制命令，则丢弃
             if not is_allowed_query and not is_nav_control:
-                mode_name = "红绿灯检测" if current_state == "TRAFFIC_LIGHT_DETECTION" else "导航"
-                print(f"[{mode_name}模式] 丢弃非对话语音: {user_text}")
+                print(f"[导航模式] 丢弃非对话语音: {user_text}")
                 return  # 直接丢弃，不进入omni
     
     # 【修改】检查是否是过马路相关命令 - 使用orchestrator控制
@@ -879,42 +857,6 @@ async def start_ai_with_text_custom(user_text: str):
             await ui_broadcast_final("[系统] 过马路模式已停止")
         else:
             await ui_broadcast_final("[系统] 导航系统未运行")
-        return
-    
-    # 【修改】检查是否是红绿灯检测命令 - 实现与盲道导航互斥
-    if "检测红绿灯" in user_text or "看红绿灯" in user_text:
-        try:
-            import trafficlight_detection
-            
-            # 切换orchestrator到红绿灯检测模式（暂停盲道导航）
-            if orchestrator:
-                orchestrator.start_traffic_light_detection()
-                print(f"[TRAFFIC] 切换到红绿灯检测模式，状态: {orchestrator.get_state()}")
-            
-            # 【改进】使用主线程模式而不是独立线程，避免掉帧
-            success = trafficlight_detection.init_model()  # 只初始化模型，不启动线程
-            trafficlight_detection.reset_detection_state()  # 重置状态
-            
-            if success:
-                await ui_broadcast_final("[系统] 红绿灯检测已启动")
-            else:
-                await ui_broadcast_final("[系统] 红绿灯模型加载失败")
-        except Exception as e:
-            print(f"[TRAFFIC] 启动红绿灯检测失败: {e}")
-            await ui_broadcast_final(f"[系统] 启动失败: {e}")
-        return
-    
-    if "停止检测" in user_text or "停止红绿灯" in user_text:
-        try:
-            # 恢复到对话模式
-            if orchestrator:
-                orchestrator.stop_navigation()  # 回到CHAT模式
-                print(f"[TRAFFIC] 红绿灯检测停止，恢复到{orchestrator.get_state()}模式")
-            
-            await ui_broadcast_final("[系统] 红绿灯检测已停止")
-        except Exception as e:
-            print(f"[TRAFFIC] 停止红绿灯检测失败: {e}")
-            await ui_broadcast_final(f"[系统] 停止失败: {e}")
         return
     
     # 【修改】检查是否是导航相关命令 - 使用orchestrator控制
@@ -1755,34 +1697,26 @@ async def ws_camera_mobile(ws: WebSocket):
                     
                     out_img = bgr
                     try:
-                        # 【新增】检查是否在红绿灯检测模式
-                        if current_state == "TRAFFIC_LIGHT_DETECTION":
-                            # 红绿灯检测模式：在主线程中直接处理，避免掉帧
-                            import trafficlight_detection
-                            result = trafficlight_detection.process_single_frame(bgr, ui_broadcast_callback=ui_broadcast_final)
-                            out_img = result['vis_image'] if result['vis_image'] is not None else bgr
-                        else:
-                            # 其他模式：正常的导航处理
-                            res = orchestrator.process_frame(bgr)
+                        res = orchestrator.process_frame(bgr)
 
+                        latest_alert = None
+                        try:
+                            extras = res.extras or {}
+                            latest_alert = extras.get("latest_alert") or extras.get("multimodal_alert")
+                        except Exception:
                             latest_alert = None
-                            try:
-                                extras = res.extras or {}
-                                latest_alert = extras.get("latest_alert") or extras.get("multimodal_alert")
-                            except Exception:
-                                latest_alert = None
-                            if latest_alert:
-                                await ui_broadcast_multimodal_alert(latest_alert)
+                        if latest_alert:
+                            await ui_broadcast_multimodal_alert(latest_alert)
 
-                            # 语音引导（内部已节流）
-                            # 注：omni对话时已切换到CHAT模式，不会生成导航语音
-                            if res.guidance_text:
-                                try:
-                                    # 先播放语音，再广播到UI
-                                    play_voice_text(res.guidance_text)
-                                    await ui_broadcast_final(f"[导航] {res.guidance_text}")
-                                except Exception:
-                                    pass
+                        # 语音引导（内部已节流）
+                        # 注：omni对话时已切换到CHAT模式，不会生成导航语音
+                        if res.guidance_text:
+                            try:
+                                # 先播放语音，再广播到UI
+                                play_voice_text(res.guidance_text)
+                                await ui_broadcast_final(f"[导航] {res.guidance_text}")
+                            except Exception:
+                                pass
 
                             # 输出图像
                             out_img = res.annotated_image if res.annotated_image is not None else bgr

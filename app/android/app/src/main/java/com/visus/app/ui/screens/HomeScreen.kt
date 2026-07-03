@@ -68,6 +68,7 @@ fun HomeScreen(
     var showRequestsDialog by remember { mutableStateOf(false) }
     var friendSubTab by remember { mutableStateOf(0) }
     var navSubTab by remember { mutableStateOf(0) }
+    var pendingMapDestination by remember { mutableStateOf("") }
 
     // Streaming state
     val streaming by StreamingUiState.isStreaming.collectAsState()
@@ -187,11 +188,28 @@ fun HomeScreen(
                             }
                             when (navSubTab) {
                                 0 -> NavigationTab(streaming, connectionStatus, serverIp, serverPort, partialText, finalMessages, latestFrame, onStartStreaming, onStopStreaming, serverIp, serverPort) { ip, port -> scope.launch { settingsDataStore.saveServerIp(ip); settingsDataStore.saveServerPort(port) } }
-                                1 -> NavigationMapScreen()
+                                1 -> NavigationMapScreen(initialDestination = pendingMapDestination)
                             }
                         }
                     }
-                    HomeTab.AGENT -> VoiceAgentScreen()
+                    HomeTab.AGENT -> VoiceAgentScreen { action, params ->
+                        when (action) {
+                            "start_assist" -> {
+                                selectedTab = HomeTab.NAVIGATION
+                                navSubTab = 0
+                                if (!streaming) onStartStreaming()
+                            }
+                            "navigate" -> {
+                                pendingMapDestination = params["destination"].orEmpty()
+                                selectedTab = HomeTab.NAVIGATION
+                                navSubTab = 1
+                            }
+                            "friends" -> {
+                                selectedTab = HomeTab.FRIENDS
+                                friendSubTab = 0
+                            }
+                        }
+                    }
                     HomeTab.ALERTS -> AlertsScreen()
                     HomeTab.PROFILE -> ProfileScreen(onLogout = onLogout)
                 }

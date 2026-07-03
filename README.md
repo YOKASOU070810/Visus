@@ -1,679 +1,289 @@
-# Visus 智能导航助手
+# Visus
 
-面向视障人士的 AI 辅助出行系统，集成盲道导航、过马路辅助、物品识别、实时语音交互等功能。
+Visus 是一个面向视力障碍用户的 Android 辅助出行应用，配套 FastAPI 后端提供登录注册、好友状态、紧急求助、地图导航、主界面 AI 助手、摄像头/语音推流与辅助出行播报能力。
 
-**⚠️ 免责声明**：本项目仅供学习交流使用，请勿直接用于视障人群的实际出行场景。
+当前仓库保留的是正在使用的主线代码：
 
----
+- Android 客户端：`app/android`
+- Python 后端：`server`
+- 后端启动脚本：`start_backend.ps1`、`server/start_backend.ps1`
 
-## 📁 项目结构
+旧版 Django/Java Demo、历史占位目录、旧 APK、红绿灯 YOLO 专用检测模块等冗余内容已清理。
 
-本项目分为两大模块：
+## 功能概览
 
-```
-Visus-main/
-├── app/                          # 应用端（Android 客户端）
-│   └── android/                  # Android 原生应用源码
-│       ├── app/src/main/         # Kotlin 源码、资源文件
-│       ├── build.gradle.kts      # Gradle 构建配置
-│       └── Visus-demo.apk        # 预编译 APK（可直接安装）
-│
-├── server/                       # 服务器端（Python 后端 + Web 监控）
-│   ├── src/                      # Python 核心源码
-│   │   ├── core/                 # FastAPI 主服务、状态管理
-│   │   ├── navigation/           # 导航工作流（盲道、过马路）
-│   │   ├── vision/               # 视觉检测（YOLO、MediaPipe）
-│   │   ├── voice/                # 语音处理（ASR、TTS、Omni）
-│   │   ├── audio/                # 音频工具（压缩、录制）
-│   │   └── utils/                # 工具模块
-│   ├── web/                      # Web 前端（监控页面）
-│   │   ├── templates/            # HTML 模板
-│   │   └── static/               # JS / CSS / 资源
-│   ├── config/                   # 部署配置
-│   │   ├── requirements.txt      # Python 依赖
-│   │   ├── Dockerfile            # Docker 镜像构建
-│   │   └── docker-compose.yml    # Docker Compose 部署
-│   ├── assets/                   # 资源文件（模型、音频提示）
-│   └── docs/                     # 文档与许可证
-│
-└── README.md                     # 本文件
-```
+- 登录 / 注册：用户身份保存到本地，后端使用 JWT 认证。
+- 主界面 AI：支持文字输入和系统语音识别，调用后端 AI Agent 理解用户意图。
+- AI 动作联动：
+  - “开启辅助出行”会切换到辅助出行页并启动推流。
+  - “去医院 / 导航到人民广场”会切换到地图导航页并自动规划路线。
+  - “查看好友状态”会切换到好友页。
+  - “紧急求助”会触发 SOS 通知。
+- 辅助出行：手机端上传摄像头和麦克风数据，后端返回 AI 语音播报、画面预览和导航提示。
+- 好友与提醒：好友列表、好友状态、SOS 弹窗、后台通知。
+- 地图导航：通过高德接口做目的地搜索、路径规划和语音摘要。
 
----
+## 项目结构
 
-## ✨ 功能特性
-
-### 🚶 盲道导航系统
-- **实时盲道检测**：基于 YOLO 分割模型实时识别盲道位置
-- **智能语音引导**：提供精准的方向指引（左转、右转、直行、停步等）
-- **障碍物检测与避障**：自动识别前方障碍物并语音提醒
-- **转弯检测**：自动识别急转弯并提前播报
-- **光流稳定**：使用 Lucas-Kanade 光流算法稳定掩码，减少画面抖动
-
-### 🚦 过马路辅助
-- **斑马线识别**：实时检测斑马线位置和方向
-- **红绿灯识别**：基于颜色和形状的红绿灯状态检测
-- **对齐引导**：语音引导用户对准斑马线中心
-- **安全提醒**：绿灯时语音提示可以通行，红灯时提醒等待
-
-### 🔍 物品识别与查找
-- **智能物品搜索**：语音指令查找物品（如"帮我找一下矿泉水"）
-- **实时目标追踪**：使用 YOLO-E 开放词汇检测 + ByteTrack 追踪
-- **手部引导**：结合 MediaPipe 手部检测，引导用户手部靠近物品
-- **抓取检测**：检测手部握持动作，确认物品已拿到
-- **多模态反馈**：视觉标注 + 语音引导 + 居中提示
-
-### 🎙️ 实时语音交互
-- **语音识别（ASR）**：当前基于 DashScope Paraformer 实时语音识别
-- **多模态对话**：基于火山引擎方舟豆包模型，支持文本和图像输入
-- **智能指令解析**：自动识别导航、查找、对话等不同类型指令
-- **上下文感知**：在不同模式下智能过滤无关指令
-
-### 📹 视频与音频处理
-- **实时视频流**：WebSocket 推流，支持多客户端同时观看
-- **音视频同步录制**：自动保存带时间戳的录像和音频文件
-- **多路音频混音**：支持系统语音、AI 回复、环境音同时播放
-- **音频压缩**：支持 ADPCM、μ-law 等压缩算法，降低传输带宽
-
-### 🎨 可视化与交互
-- **Web 实时监控**：浏览器端实时查看处理后的视频流
-- **状态面板**：显示导航状态、检测信息、FPS 等
-- **中文友好**：所有界面和语音使用中文，支持自定义字体
-
----
-
-## 💻 系统要求
-
-### 硬件要求
-- **服务器端（电脑）**：
-  - CPU: Intel i5 或以上（推荐 i7/i9）
-  - GPU: NVIDIA GPU（支持 CUDA 11.8+，推荐 RTX 3060 或以上）
-  - 内存: 8GB RAM（推荐 16GB）
-  - 存储: 10GB 可用空间
-  - 网络: 与手机处于同一局域网
-
-- **客户端（安卓手机）**：
-  - Android 8.0 (API 26) 或更高版本
-  - 摄像头（用于拍摄前方画面）
-  - 麦克风（用于语音输入）
-  - 扬声器/耳机（用于语音输出）
-
-### 软件要求
-- **操作系统**: Windows 10/11, Linux (Ubuntu 20.04+), macOS 10.15+
-- **Python**: 3.9 - 3.11（推荐 3.10/3.11）
-- **CUDA**: 11.8 或更高版本（GPU 加速必需）
-- **浏览器**: Chrome 90+, Firefox 88+, Edge 90+（用于 Web 监控）
-
-### API 密钥
-- **火山引擎方舟 API Key**（必需）：
-  - 用于豆包大模型对话、图像理解和物品名称归一化
-  - 需要配置方舟推理接入点 ID（`ARK_MODEL` / `DOUBAO_MODEL`）
-- **火山引擎语音合成配置**（必需）：
-  - 用于把豆包文本回复合成为手机端可播放的语音
-  - 需要配置 `VOLCENGINE_TTS_APP_ID`、`VOLCENGINE_TTS_ACCESS_TOKEN`、`VOLCENGINE_TTS_CLUSTER`、`VOLCENGINE_TTS_VOICE_TYPE`
-- **阿里云 DashScope API Key**（当前仍必需）：
-  - 仅用于实时语音识别（ASR）
-  - 如果后续接入火山实时 ASR，可以移除此项
-
----
-
-## 🚀 快速开始
-
-### 一、服务器端部署
-
-#### 1. 进入服务器目录
-
-```bash
-cd server
+```text
+Visus/
+├─ app/android/                  # Android 主应用，Kotlin + Jetpack Compose
+│  ├─ app/src/main/java/com/visus/app/
+│  │  ├─ ui/screens/             # 主要页面：AI、导航、好友、提醒、我的
+│  │  ├─ network/                # HTTP / WebSocket API 客户端
+│  │  ├─ service/                # 推流、后台通知、位置上报服务
+│  │  └─ data/                   # 登录状态、设置、全局状态
+│  └─ app/build/outputs/apk/     # Gradle 生成的 APK 输出目录
+├─ server/
+│  ├─ src/core/app_main.py       # 完整后端入口
+│  ├─ src/social/                # 登录、好友、消息、地图、AI Agent API
+│  ├─ src/voice/                 # ASR、LLM、TTS、音频流
+│  ├─ src/navigation/            # 辅助出行/过马路相关流程
+│  ├─ src/vision/                # 寻物和障碍物相关视觉能力
+│  ├─ config/requirements.txt    # Python 依赖
+│  ├─ .env.example               # 环境变量模板
+│  └─ start_backend.ps1          # 后端启动脚本
+├─ start_backend.ps1             # 根目录快捷启动脚本
+└─ README.md
 ```
 
-#### 2. 安装依赖
+## 环境要求
 
-```bash
-# 创建虚拟环境（推荐）
-python -m venv venv
+### 后端
 
-# Windows
-venv\Scripts\activate
+- Windows 10/11
+- Python 3.9 到 3.11，推荐 Python 3.11
+- PowerShell
+- 可访问豆包方舟、高德地图、DashScope 的网络环境
 
-# Linux/macOS
-source venv/bin/activate
+后端主要依赖：
 
-# 安装 Python 包
-pip install -r config/requirements.txt
+- FastAPI / Uvicorn
+- SQLAlchemy / PyJWT
+- OpenAI SDK，用于调用火山方舟兼容接口
+- DashScope，用于实时 ASR
+- Volcengine TTS
+- OpenCV / MediaPipe / Ultralytics / PyTorch，用于辅助出行视觉能力
+
+### Android
+
+- Android Studio 或本仓库自带 Gradle Wrapper
+- JDK 17
+- Android SDK 35
+- 手机 Android 8.0 及以上，推荐 Android 11 及以上
+- 手机和电脑连接同一个局域网
+
+## 后端配置
+
+1. 进入项目根目录：
+
+```powershell
+cd E:\newvisusmain\Visus
 ```
 
-#### 3. 安装 PyTorch（GPU 版本）
+2. 如果还没有 `server\.env`，复制模板：
 
-```bash
-pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118
+```powershell
+Copy-Item server\.env.example server\.env
 ```
 
-如果使用 CPU 模式：
-```bash
-pip install torch torchvision
-```
+3. 编辑 `server\.env`，填写真实密钥：
 
-> **注意**：Windows 上 PyAudio 可能需要手动安装，请访问 https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio
-
-#### 4. 下载模型文件
-
-将以下模型文件放入 `server/assets/models/` 目录：
-
-| 模型文件 | 用途 | 大小 | 来源 |
-|---------|------|------|------|
-| `yolo-seg.pt` | 盲道分割 | ~50MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
-| `yoloe-11l-seg.pt` | 开放词汇检测 | ~80MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
-| `shoppingbest5.pt` | 物品识别 | ~30MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
-| `trafficlight.pt` | 红绿灯检测 | ~20MB | [ModelScope](https://www.modelscope.cn/models/archifancy/Visus_for_navigation) |
-| `hand_landmarker.task` | 手部检测 | ~15MB | [MediaPipe Models](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker#models) |
-
-> 模型下载地址：https://www.modelscope.cn/models/archifancy/Visus_for_navigation
-
-#### 5. 配置 API 密钥
-
-在 `server/` 目录创建 `.env` 文件：
-
-```bash
-# .env
-ARK_API_KEY=your-volcengine-ark-api-key
-ARK_MODEL=your-ark-endpoint-id
+```env
+ARK_API_KEY=你的火山方舟API Key
+ARK_MODEL=你的方舟模型/endpoint id
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 
-VOLCENGINE_TTS_APP_ID=your-volcengine-tts-app-id
-VOLCENGINE_TTS_ACCESS_TOKEN=your-volcengine-tts-access-token
+VOLCENGINE_TTS_APP_ID=你的火山TTS App ID
+VOLCENGINE_TTS_ACCESS_TOKEN=你的火山TTS Access Token
 VOLCENGINE_TTS_CLUSTER=volcano_tts
 VOLCENGINE_TTS_VOICE_TYPE=BV700_V2_streaming
 VOLCENGINE_TTS_ENCODING=wav
 
-# 当前实时 ASR 仍使用 DashScope
-DASHSCOPE_API_KEY=sk-your-dashscope-key-here
+DASHSCOPE_API_KEY=你的DashScope实时语音识别Key
 ```
 
-或在启动前设置环境变量：
+4. 首次安装依赖：
 
-```bash
-# Windows PowerShell
-$env:ARK_API_KEY="your-volcengine-ark-api-key"
-$env:ARK_MODEL="your-ark-endpoint-id"
-$env:ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-$env:VOLCENGINE_TTS_APP_ID="your-volcengine-tts-app-id"
-$env:VOLCENGINE_TTS_ACCESS_TOKEN="your-volcengine-tts-access-token"
-$env:VOLCENGINE_TTS_CLUSTER="volcano_tts"
-$env:VOLCENGINE_TTS_VOICE_TYPE="BV700_V2_streaming"
-$env:DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
-
-# Linux/macOS
-export ARK_API_KEY="your-volcengine-ark-api-key"
-export ARK_MODEL="your-ark-endpoint-id"
-export ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-export VOLCENGINE_TTS_APP_ID="your-volcengine-tts-app-id"
-export VOLCENGINE_TTS_ACCESS_TOKEN="your-volcengine-tts-access-token"
-export VOLCENGINE_TTS_CLUSTER="volcano_tts"
-export VOLCENGINE_TTS_VOICE_TYPE="BV700_V2_streaming"
-export DASHSCOPE_API_KEY="sk-your-dashscope-key-here"
+```powershell
+powershell -ExecutionPolicy Bypass -File server\start_backend.ps1 -InstallDeps
 ```
 
-#### 6. 启动服务器
+5. 启动后端：
 
-```bash
-python src/core/app_main.py
+```powershell
+powershell -ExecutionPolicy Bypass -File server\start_backend.ps1
 ```
 
-服务器将在 `http://0.0.0.0:8081` 启动，打开浏览器访问即可看到实时监控界面。
+启动成功后会看到：
 
----
-
-### 二、客户端安装（Android）
-
-#### 方式一：直接安装 APK
-
-1. 将 `app/android/Visus-demo.apk` 传输到 Android 手机
-2. 允许安装未知来源应用
-3. 安装并打开 App
-
-#### 方式二：自行编译
-
-1. 使用 Android Studio 打开 `app/android/` 目录
-2. 同步 Gradle，编译项目
-3. 生成 APK 或直接在模拟器/真机上运行
-
-#### 配置服务器地址
-
-1. 打开 App → 点击右上角齿轮图标进入设置
-2. 输入电脑的局域网 IP 地址（如 `192.168.1.100`）
-3. 端口填写 `8081`
-4. 保存后自动连接
-
----
-
-## 🏗️ 系统架构
-
-### 整体架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        客户端层                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Android App │  │   浏览器      │  │   移动端      │      │
-│  │  (视频/音频)  │  │  (监控界面)   │  │  (语音控制)   │      │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
-└─────────┼──────────────────┼──────────────────┼─────────────┘
-          │ WebSocket        │ HTTP/WS          │ WebSocket
-┌─────────┼──────────────────┼──────────────────┼─────────────┐
-│         │                  │                  │              │
-│    ┌────▼──────────────────▼──────────────────▼────────┐    │
-│    │         FastAPI 主服务 (app_main.py)              │    │
-│    │  - WebSocket 路由管理                              │    │
-│    │  - 音视频流分发                                     │    │
-│    │  - 状态管理与协调                                   │    │
-│    └────┬────────────────┬────────────────┬─────────────┘    │
-│         │                │                │                  │
-│  ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐         │
-│  │ ASR 模块     │  │ Omni 对话   │  │ 音频播放     │         │
-│  │ (asr_core)   │  │(omni_client)│  │(audio_player)│         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│                                                               │
-│         应用层                                                │
-└───────────────────────────────────────────────────────────────┘
-          │                  │                  │
-┌─────────▼──────────────────▼──────────────────▼──────────────┐
-│                     导航统领层                                │
-│    ┌─────────────────────────────────────────────────┐       │
-│    │  NavigationMaster (navigation_master.py)         │       │
-│    │  - 状态机：IDLE/CHAT/BLINDPATH_NAV/              │       │
-│    │            CROSSING/TRAFFIC_LIGHT/ITEM_SEARCH    │       │
-│    │  - 模式切换与协调                                │       │
-│    └───┬─────────────────────┬───────────────────┬───┘       │
-│        │                     │                   │            │
-│   ┌────▼────────┐   ┌────────▼────────┐   ┌─────▼──────┐   │
-│   │ 盲道导航     │   │  过马路导航      │   │ 物品查找    │   │
-│   │(blindpath)   │   │ (crossstreet)   │   │(yolomedia)  │   │
-│   └──────────────┘   └──────────────────┘   └─────────────┘   │
-└───────────────────────────────────────────────────────────────┘
-          │                  │                  │
-┌─────────▼──────────────────▼──────────────────▼──────────────┐
-│                       模型推理层                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ YOLO 分割     │  │  YOLO-E 检测 │  │ MediaPipe    │       │
-│  │ (盲道/斑马线) │  │ (开放词汇)   │  │  (手部检测)   │       │
-│  └──────────────┘  └──────────────┘  └──────────────┘       │
-│  ┌──────────────┐  ┌──────────────┐                         │
-│  │ 红绿灯检测    │  │ 光流稳定      │                         │
-│  │(HSV+YOLO)     │  │(Lucas-Kanade)│                         │
-│  └──────────────┘  └──────────────┘                         │
-└───────────────────────────────────────────────────────────────┘
-          │
-┌─────────▼─────────────────────────────────────────────────────┐
-│                    外部服务层                                  │
-│  ┌──────────────────────────────────────────────┐            │
-│  │  阿里云 DashScope API                         │            │
-│  │  - Paraformer ASR (实时语音识别)              │            │
-│  │  - Qwen-Omni-Turbo (多模态对话)               │            │
-│  │  - Qwen-Turbo (标签提取)                      │            │
-│  └──────────────────────────────────────────────┘            │
-└───────────────────────────────────────────────────────────────┘
+```text
+[INFO] Backend URL: http://localhost:8081
+[INFO] Starting Visus backend...
 ```
 
-### 核心模块说明
+后端默认监听：
 
-| 模块 | 文件 | 功能 |
-|------|------|------|
-| **主应用** | `server/src/core/app_main.py` | FastAPI 服务、WebSocket 管理、状态协调 |
-| **导航统领** | `server/src/core/navigation_master.py` | 状态机管理、模式切换、语音节流 |
-| **模型管理** | `server/src/core/models.py` | AI 模型加载与设备管理 |
-| **盲道导航** | `server/src/navigation/workflow_blindpath.py` | 盲道检测、避障、转弯引导 |
-| **过马路导航** | `server/src/navigation/workflow_crossstreet.py` | 斑马线检测、红绿灯识别、对齐引导 |
-| **斑马线感知** | `server/src/navigation/crosswalk_awareness.py` | 斑马线位置与方向检测 |
-| **红绿灯检测** | `server/src/navigation/trafficlight_detection.py` | 红绿灯颜色与状态识别 |
-| **物品查找** | `server/src/vision/yolomedia.py` | 物品检测、手部引导、抓取确认 |
-| **YOLO-E 后端** | `server/src/vision/yoloe_backend.py` | 开放词汇检测后端 |
-| **障碍物检测** | `server/src/vision/obstacle_detector_client.py` | 障碍物检测客户端 |
-| **语音识别** | `server/src/voice/asr_core.py` | 实时 ASR、VAD、指令解析 |
-| **语音合成** | `server/src/voice/omni_client.py` | Qwen-Omni 流式语音生成 |
-| **音频播放** | `server/src/voice/audio_player.py` | 多路混音、TTS 播放、音量控制 |
-| **音频流** | `server/src/voice/audio_stream.py` | 音频流管理与 WebSocket 推流 |
-| **音频压缩** | `server/src/audio/audio_compressor.py` | ADPCM/μ-law 音频压缩 |
-| **同步录制** | `server/src/audio/sync_recorder.py` | 音视频同步录制 |
-| **桥接 IO** | `server/src/utils/bridge_io.py` | 线程安全的帧缓冲与分发 |
-
----
-
-## 📖 使用说明
-
-### 语音指令
-
-系统支持以下语音指令（说话时无需唤醒词）：
-
-#### 导航控制
-| 指令 | 功能 |
-|------|------|
-| "开始导航" / "盲道导航" | 启动盲道导航 |
-| "停止导航" / "结束导航" | 停止盲道导航 |
-| "开始过马路" / "帮我过马路" | 启动过马路模式 |
-| "过马路结束" / "结束过马路" | 停止过马路模式 |
-
-#### 红绿灯检测
-| 指令 | 功能 |
-|------|------|
-| "检测红绿灯" / "看红绿灯" | 启动红绿灯检测 |
-| "停止检测" / "停止红绿灯" | 停止检测 |
-
-#### 物品查找
-| 指令 | 功能 |
-|------|------|
-| "帮我找一下 [物品名]" | 启动物品搜索 |
-| "找到了" / "拿到了" | 确认找到物品 |
-
-**示例**：
-- "帮我找一下红牛"
-- "找一下 AD 钙奶"
-- "帮我找矿泉水"
-
-#### 智能对话
-| 指令 | 功能 |
-|------|------|
-| "帮我看看这是什么" | 拍照识别 |
-| "这个东西能吃吗" | 物品咨询 |
-| 任意其他问题 | AI 对话 |
-
-### 导航状态说明
-
-系统包含以下主要状态（自动切换）：
-
-1. **IDLE** - 空闲状态
-   - 等待用户指令
-   - 显示原始视频流
-
-2. **CHAT** - 对话模式
-   - 与 AI 进行多模态对话
-   - 暂停导航功能
-
-3. **BLINDPATH_NAV** - 盲道导航
-   - **ONBOARDING**: 上盲道引导（旋转对准 → 平移至中心）
-   - **NAVIGATING**: 沿盲道行走（实时方向修正、障碍物检测）
-   - **MANEUVERING_TURN**: 转弯处理
-   - **AVOIDING_OBSTACLE**: 避障
-
-4. **CROSSING** - 过马路模式
-   - **SEEKING_CROSSWALK**: 寻找斑马线
-   - **WAIT_TRAFFIC_LIGHT**: 等待绿灯
-   - **CROSSING**: 过马路中
-   - **SEEKING_NEXT_BLINDPATH**: 寻找对面盲道
-
-5. **ITEM_SEARCH** - 物品查找
-   - 实时检测目标物品
-   - 引导手部靠近
-   - 确认抓取
-
-6. **TRAFFIC_LIGHT_DETECTION** - 红绿灯检测
-   - 实时检测红绿灯状态
-   - 语音播报颜色变化
-
-### Web 监控界面
-
-打开浏览器访问 `http://localhost:8081`，可以看到：
-
-- **实时视频流**：显示处理后的视频，包括导航标注
-- **状态面板**：当前模式、检测信息、FPS
-- **语音识别结果**：显示识别的文字和 AI 回复
-- **聊天界面**：左右气泡式对话展示
-
-### WebSocket 端点
-
-| 端点 | 用途 | 数据格式 |
-|------|------|---------|
-| `/ws/camera` | 移动端相机推流 | Binary (JPEG) |
-| `/ws/viewer` | 浏览器订阅视频 | Binary (JPEG) |
-| `/ws_audio` | 移动端音频上传 | Binary (PCM16) |
-| `/ws_ui` | UI 状态推送 | JSON |
-| `/stream.wav` | 音频下载流 | Binary (WAV) |
-
----
-
-## ⚙️ 配置说明
-
-### 环境变量
-
-在 `server/` 目录创建 `.env` 文件配置以下参数：
-
-```bash
-# 阿里云 API（必需）
-DASHSCOPE_API_KEY=sk-xxxxx
-
-# 模型路径（可选，使用默认路径可不配置）
-BLIND_PATH_MODEL=assets/models/yolo-seg.pt
-OBSTACLE_MODEL=assets/models/yoloe-11l-seg.pt
-YOLOE_MODEL_PATH=assets/models/yoloe-11l-seg.pt
-
-# 设备配置
-VISUS_DEVICE=cuda:0           # 计算设备（cuda:0 或 cpu）
-VISUS_AMP=bf16                # 自动混合精度（bf16/fp16/fp32）
-VISUS_GPU_SLOTS=2             # GPU 并发槽位数
-
-# 导航参数
-VISUS_MASK_MIN_AREA=1500      # 最小掩码面积
-VISUS_MASK_MORPH=3            # 形态学核大小
-VISUS_MASK_MISS_TTL=6         # 掩码丢失容忍帧数
-VISUS_PANEL_SCALE=0.65        # 数据面板缩放
-VISUS_STRAIGHT_INTERVAL=4.0   # 直行播报间隔（秒）
-VISUS_DIRECTION_INTERVAL=3.0  # 方向指令间隔（秒）
-VISUS_OBS_INTERVAL=15         # 障碍物检测间隔（帧）
-VISUS_BLINDPATH_INTERVAL=8    # 盲道检测间隔（帧）
-VISUS_CROSSWALK_INTERVAL=4    # 斑马线检测间隔（帧）
-
-# 音频配置
-VISUS_COMPRESS_AUDIO=1        # 启用音频压缩（1=启用，0=禁用）
-VISUS_COMPRESS_TYPE=adpcm     # 压缩类型（adpcm/ulaw/none）
-TTS_INTERVAL_SEC=1.0          # 语音播报间隔
-ENABLE_TTS=true               # 启用语音播报
+```text
+http://0.0.0.0:8081
 ```
 
-### 修改模型路径
+手机访问时不要填 `localhost`，要填电脑在局域网中的 IP，例如：
 
-如果模型文件不在默认位置，可以在相应文件中修改：
-
-```python
-# server/src/navigation/workflow_blindpath.py
-seg_model_path = "your/custom/path/yolo-seg.pt"
-
-# server/src/vision/yolomedia.py
-YOLO_MODEL_PATH = "your/custom/path/shoppingbest5.pt"
-HAND_TASK_PATH = "your/custom/path/hand_landmarker.task"
+```text
+192.168.1.23:8081
 ```
 
-### 调整性能参数
+## 获取电脑局域网 IP
 
-根据硬件性能调整：
+在 PowerShell 执行：
 
-```python
-# server/src/vision/yolomedia.py
-HAND_DOWNSCALE = 0.8    # 手部检测降采样（越小越快，精度降低）
-HAND_FPS_DIV = 1        # 手部检测抽帧（2=隔帧，3=每3帧）
-
-# server/src/navigation/workflow_blindpath.py  
-FEATURE_PARAMS = dict(
-    maxCorners=600,      # 光流特征点数（越少越快）
-    qualityLevel=0.001,  # 特征点质量
-    minDistance=5        # 特征点最小间距
-)
+```powershell
+ipconfig
 ```
 
----
+找到当前 Wi-Fi 或以太网下的 IPv4 地址，例如：
 
-## 🛠️ 开发文档
-
-### 添加新的语音指令
-
-1. 在 `server/src/core/app_main.py` 的 `start_ai_with_text_custom()` 函数中添加：
-
-```python
-# 检查新指令
-if "新指令关键词" in user_text:
-    # 执行自定义逻辑
-    print("[CUSTOM] 新指令被触发")
-    await ui_broadcast_final("[系统] 新功能已启动")
-    return
+```text
+IPv4 地址 . . . . . . . . . . . . : 192.168.1.23
 ```
 
-2. 如需修改指令过滤规则：
+Android App 里服务器地址填：
 
-```python
-# 修改 allowed_keywords 列表
-allowed_keywords = ["帮我看", "帮我找", "你的新关键词"]
+```text
+IP: 192.168.1.23
+Port: 8081
 ```
 
-### 扩展导航功能
+## Android 构建 APK
 
-1. 在 `server/src/navigation/workflow_blindpath.py` 添加新状态：
+在项目根目录执行：
 
-```python
-# 在 BlindPathNavigator.__init__() 中初始化
-self.your_new_state_var = False
-
-# 在 process_frame() 中处理
-def process_frame(self, image):
-    if self.your_new_state_var:
-        # 自定义处理逻辑
-        guidance_text = "新状态引导"
+```powershell
+cd app\android
+.\gradlew.bat :app:assembleDebug
 ```
 
-2. 在 `server/src/core/navigation_master.py` 添加状态机状态：
+构建成功后 APK 位于：
 
-```python
-class NavigationMaster:
-    def start_your_new_mode(self):
-        self.state = "YOUR_NEW_MODE"
-        # 初始化逻辑
+```text
+E:\newvisusmain\Visus\app\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-### 集成新模型
+## 手机安装 APK
 
-1. 创建模型包装类：
+### 方法一：直接复制安装
 
-```python
-# your_model_wrapper.py
-class YourModelWrapper:
-    def __init__(self, model_path):
-        self.model = load_your_model(model_path)
-    
-    def detect(self, image):
-        # 推理逻辑
-        return results
+1. 把 `app-debug.apk` 复制到 Android 手机。
+2. 在手机文件管理器中点击 APK。
+3. 如果提示“禁止安装未知来源应用”，进入系统设置允许当前文件管理器安装未知应用。
+4. 安装完成后打开 Visus。
+
+### 方法二：使用 ADB 安装
+
+1. 手机开启开发者模式和 USB 调试。
+2. 用 USB 连接电脑。
+3. 在项目根目录执行：
+
+```powershell
+adb install -r app\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-2. 在 `server/src/core/app_main.py` 中加载：
+如果提示设备未授权，请在手机上确认 USB 调试授权。
 
-```python
-your_model = YourModelWrapper("assets/models/your_model.pt")
+## App 使用流程
+
+1. 启动后端。
+2. 安装并打开 Android App。
+3. 注册或登录账号。
+4. 进入“我的”或导航页设置服务器 IP 和端口。
+5. 主界面 AI：
+   - 可以输入“你好”“附近医院”“开启辅助出行”“我在哪”“紧急求助”。
+   - 语音按钮依赖手机系统语音识别服务；如果手机不支持，会自动显示文字输入。
+6. 辅助出行：
+   - 点击“导航”底部栏。
+   - 在“辅助出行”页点击“开始辅助出行”。
+   - 手机会推送摄像头和麦克风到后端，后端返回画面和语音播报。
+7. 地图导航：
+   - 点击“地图导航”。
+   - 输入目的地或通过 AI 说“去附近医院”。
+   - App 会规划路线并播报导航摘要。
+8. 好友与提醒：
+   - 添加好友后可以查看好友状态。
+   - 触发 SOS 后，好友端会收到提醒和弹窗。
+
+## 常见问题
+
+### AI 显示 Read timed out
+
+主界面 AI 请求已经使用较长超时。如果仍超时，通常是后端无法访问方舟模型或模型响应过慢。请检查：
+
+- `server\.env` 中 `ARK_API_KEY` 和 `ARK_MODEL` 是否正确。
+- 电脑网络是否能访问火山方舟。
+- 后端终端是否有 `[AI ERROR]` 或 HTTP 错误日志。
+
+### 语音识别不可用
+
+主界面 AI 使用 Android 系统 `SpeechRecognizer`。如果手机系统没有可用语音识别服务，App 会显示文字输入。解决办法：
+
+- 确认手机系统语音输入服务已启用。
+- 安装或启用系统自带语音识别服务。
+- 继续使用文字输入，不影响 AI 调用。
+
+### 手机连不上后端
+
+请检查：
+
+- 手机和电脑是否在同一个 Wi-Fi。
+- App 里服务器 IP 是否是电脑局域网 IP，而不是 `localhost`。
+- Windows 防火墙是否放行 Python/8081 端口。
+- 后端是否正在运行。
+
+### 注册登录后闪退
+
+通常是权限或后台服务启动失败导致。当前版本已对后台服务启动做了异常保护。仍出现时请检查：
+
+- 是否授予相机、麦克风、通知、定位权限。
+- Android 系统是否限制后台服务。
+- 重新安装最新构建的 APK。
+
+## 清理说明
+
+本次清理删除了不属于当前主线的内容：
+
+- 旧版 Django + Java Android Demo：`alert_app`
+- 空的历史占位文件：`ai_assist`、`alert-buddy`、`alert_app_local_backup`、`android-app/android-app`、`Visus`
+- 旧 APK：`app/android/Visus-demo.apk`
+- 红绿灯 YOLO 专用检测模块：`server/src/navigation/trafficlight_detection.py`
+- 后端启动时的红绿灯模型预加载和相关语音命令入口
+
+保留内容：
+
+- 当前 Kotlin Compose Android App
+- FastAPI 后端
+- 主界面 AI
+- 地图导航
+- 好友/提醒/SOS
+- 辅助出行推流
+- 寻物和障碍物相关视觉代码
+
+## 开发常用命令
+
+后端语法检查：
+
+```powershell
+server\.venv\Scripts\python.exe -m py_compile server\src\core\app_main.py server\src\social\ai_agent.py
 ```
 
-3. 在相应的工作流中调用：
+Android Debug 构建：
 
-```python
-results = your_model.detect(image)
+```powershell
+cd app\android
+.\gradlew.bat :app:assembleDebug
 ```
 
-### 调试技巧
+查看 Git 状态：
 
-1. **启用详细日志**：
-
-```python
-# app_main.py 顶部
-import logging
-logging.basicConfig(level=logging.DEBUG)
+```powershell
+git status -sb
 ```
-
-2. **查看帧率瓶颈**：
-
-```python
-# yolomedia.py
-PERF_DEBUG = True  # 打印处理时间
-```
-
----
-
-### 自定义系统提示词
-
-AI 对话的默认系统提示词位于 `server/prompt.txt`，定义了面向视障人士的辅助服务行为准则，包括：
-
-- **路况识别**：描述前方道路环境，区分人行道、马路、台阶、障碍物等
-- **物品找寻**：精准描述物品位置、外观、距离，指引伸手方向
-- **电梯/门体判断**：识别电梯运行状态、门开关状态
-- **导航指引**：给出直行、左转、右转等行动指令
-- **通用视觉解读**：识别文字、标识、红绿灯、车牌等
-- **情感陪伴**：温和耐心的语气，危险场景下的情绪安抚
-
-如需修改 AI 的说话风格或增加新的行为规则，直接编辑 `server/prompt.txt` 即可，无需重启服务（下次对话自动生效）。
-
----
-
-## 🐳 Docker 部署
-
-### 使用 Docker Compose
-
-```bash
-cd server
-
-docker-compose -f config/docker-compose.yml up -d
-```
-
-### 构建镜像
-
-```bash
-cd server
-
-docker build -f config/Dockerfile -t visus:latest .
-docker run -p 8081:8081 --gpus all visus:latest
-```
-
----
-
-## 📝 更新日志
-
-### 最新版本 [1.0.0]
-
-- 盲道导航系统（实时检测、语音引导、避障）
-- 过马路辅助（斑马线识别、红绿灯检测）
-- 物品识别与查找（YOLO-E + 手部引导）
-- 实时语音交互（ASR + Qwen-Omni）
-- Web 实时监控界面
-- 安卓端 App
-
----
-
-## 🤝 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
-
----
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [server/docs/LICENSE](server/docs/LICENSE) 文件
-
----
-
-## 🙏 致谢
-
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) - 目标检测与分割
-- [MediaPipe](https://developers.google.com/mediapipe) - 手部检测
-- [阿里云 DashScope](https://dashscope.console.aliyun.com/) - ASR 与多模态对话
-- [FastAPI](https://fastapi.tiangolo.com/) - Web 框架
-- [OpenCV](https://opencv.org/) - 计算机视觉
-
----
-
-<div align="center">
-
-**[⬆ 回到顶部](#visus-智能导航助手)**
-
-Made with ❤️ for a more accessible world
-
-</div>

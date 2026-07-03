@@ -15,6 +15,9 @@ import java.net.URL
 // Communicates with the Visus FastAPI server's /api/ endpoints.
 object SocialApiClient {
     private const val TAG = "SocialApiClient"
+    private const val CONNECT_TIMEOUT_MS = 10000
+    private const val DEFAULT_READ_TIMEOUT_MS = 20000
+    const val AI_READ_TIMEOUT_MS = 45000
     private var baseUrl: String = "http://10.0.2.2:8081"
     private var authToken: String? = null
     var amapKey: String = ""
@@ -50,14 +53,19 @@ object SocialApiClient {
     data class ApiResult<T>(val success: Boolean, val data: T?, val error: String?)
 
     // ── HTTP helpers ──
-    suspend fun post(path: String, body: JSONObject, token: String? = authToken): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun post(
+        path: String,
+        body: JSONObject,
+        token: String? = authToken,
+        readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS
+    ): JSONObject = withContext(Dispatchers.IO) {
         val url = URL("$baseUrl$path")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.setRequestProperty("Accept", "application/json")
-        conn.connectTimeout = 8000
-        conn.readTimeout = 8000
+        conn.connectTimeout = CONNECT_TIMEOUT_MS
+        conn.readTimeout = readTimeoutMs
         token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
         if (amapKey.isNotBlank()) conn.setRequestProperty("X-Visus-AMAP-Key", amapKey)
         if (arkKey.isNotBlank()) conn.setRequestProperty("X-Visus-ARK-Key", arkKey)
@@ -83,8 +91,8 @@ object SocialApiClient {
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.setRequestProperty("Accept", "application/json")
-        conn.connectTimeout = 8000
-        conn.readTimeout = 8000
+        conn.connectTimeout = CONNECT_TIMEOUT_MS
+        conn.readTimeout = DEFAULT_READ_TIMEOUT_MS
         token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
         if (amapKey.isNotBlank()) conn.setRequestProperty("X-Visus-AMAP-Key", amapKey)
         if (arkKey.isNotBlank()) conn.setRequestProperty("X-Visus-ARK-Key", arkKey)

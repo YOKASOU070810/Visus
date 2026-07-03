@@ -25,7 +25,7 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NavigationMapScreen() {
+fun NavigationMapScreen(initialDestination: String = "") {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var destination by remember { mutableStateOf("") }
@@ -43,6 +43,43 @@ fun NavigationMapScreen() {
     fun speak(text: String) {
         tts.language = Locale.CHINESE
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nav_${System.currentTimeMillis()}")
+    }
+
+    fun planRoute(dest: String) {
+        if (dest.isBlank()) {
+            errorMsg = "请输入目的地"
+            return
+        }
+        isLoading = true
+        errorMsg = null
+        scope.launch {
+            try {
+                val result = MapApiClient.navigate(
+                    dest.trim(),
+                    31.2304, 121.4737, // Default: Shanghai
+                    "上海",
+                    AuthState.token.value
+                )
+                if (result != null) {
+                    navigateResult = result
+                    currentStep = 0
+                    speak(result.voiceSummary)
+                } else {
+                    errorMsg = "无法找到\"$dest\"，请换个说法试试"
+                }
+            } catch (e: Exception) {
+                errorMsg = "导航失败: ${e.message}"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(initialDestination) {
+        if (initialDestination.isNotBlank() && initialDestination != destination) {
+            destination = initialDestination
+            planRoute(initialDestination)
+        }
     }
 
     Scaffold(
@@ -83,33 +120,7 @@ fun NavigationMapScreen() {
                         )
                         Button(
                             onClick = {
-                                if (destination.isBlank()) {
-                                    errorMsg = "请输入目的地"
-                                    return@Button
-                                }
-                                isLoading = true
-                                errorMsg = null
-                                scope.launch {
-                                    try {
-                                        val result = MapApiClient.navigate(
-                                            destination.trim(),
-                                            31.2304, 121.4737, // Default: Shanghai
-                                            "上海",
-                                            AuthState.token.value
-                                        )
-                                        if (result != null) {
-                                            navigateResult = result
-                                            currentStep = 0
-                                            speak(result.voiceSummary)
-                                        } else {
-                                            errorMsg = "无法找到\"$destination\"，请换个说法试试"
-                                        }
-                                    } catch (e: Exception) {
-                                        errorMsg = "导航失败: ${e.message}"
-                                    } finally {
-                                        isLoading = false
-                                    }
-                                }
+                                planRoute(destination)
                             },
                             enabled = !isLoading,
                             shape = RoundedCornerShape(8.dp)

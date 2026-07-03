@@ -24,6 +24,15 @@
         android:name="android.hardware.camera.front"
         android:required="false" />
 
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:name=".VisusApplication"
         android:allowBackup="true"

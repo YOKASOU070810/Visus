@@ -31,13 +31,9 @@ try:
 except Exception:
     ObstacleDetectorClient = None
 
-# 红绿灯检测模块
-try:
-    from navigation import trafficlight_detection
-    TRAFFIC_LIGHT_AVAILABLE = True
-except Exception:
-    TRAFFIC_LIGHT_AVAILABLE = False
-    trafficlight_detection = None
+# 红绿灯模型检测已从当前主线移除，过马路流程只保留斑马线/盲道/障碍物判断。
+TRAFFIC_LIGHT_AVAILABLE = False
+trafficlight_detection = None
 
 logger = logging.getLogger(__name__)
 

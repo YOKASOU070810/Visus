@@ -111,15 +111,29 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
 
         scope.launch {
             try {
-                val token = AuthState.token.value ?: return@launch
+                val token = AuthState.token.value
+                if (token.isNullOrBlank()) {
+                    isThinking = false
+                    val msg = "请先登录后再使用 AI 助手。"
+                    messages = messages + VoiceMessage(isUser = false, text = msg)
+                    statusText = "轻触麦克风"
+                    scrollToBottom()
+                    return@launch
+                }
                 val body = JSONObject().apply {
                     put("text", text); put("user_id", AuthState.currentUserId.value)
                     put("lat", 0.0); put("lng", 0.0); put("city", "")
                 }
-                val resp = SocialApiClient.post("/api/agent/command", body, token)
+                val resp = SocialApiClient.post(
+                    "/api/agent/command",
+                    body,
+                    token,
+                    readTimeoutMs = SocialApiClient.AI_READ_TIMEOUT_MS
+                )
                 val data = resp.optJSONObject("data")
                 val action = data?.optString("action", "chat") ?: "chat"
-                val replyText = data?.optString("reply_text", "") ?: "抱歉，我没理解你的意思"
+                val replyText = data?.optString("reply_text", "")?.takeIf { it.isNotBlank() }
+                    ?: "我收到了，但后端没有返回具体回复。"
                 val params = data?.optJSONObject("params")
                 val extra = data?.optJSONObject("extra")
 
@@ -134,7 +148,10 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
                     }
                     "send_sos" -> SocialState.triggerEmergency("manual_sos", params?.optString("message", text) ?: text)
                     "start_assist" -> onNavigate("start_assist", emptyMap())
-                    "check_friends" -> SocialState.loadFriends()
+                    "check_friends" -> {
+                        SocialState.loadFriends()
+                        onNavigate("friends", emptyMap())
+                    }
                     "search_nearby" -> {
                         extra?.optJSONArray("results")?.let { results ->
                             if (results.length() > 0) {
@@ -158,7 +175,6 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
                 isThinking = false
                 messages = messages + VoiceMessage(isUser = false, text = "抱歉，AI暂不可用：${e.message}")
                 statusText = "轻触麦克风"; scrollToBottom()
-                scope.launch { delay(1500); doStartListening() }
             }
         }
     }
@@ -318,7 +334,7 @@ fun VoiceAgentScreen(onNavigate: (String, Map<String, String>) -> Unit = { _, _ 
                     }
                 }
                 if (!isSpeechAvailable) {
-                    Text("语音识别不可用，请使用文字输入", color = Color(0xFFF59E0B), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
+                    Text("当前手机没有可用的系统语音识别服务，请使用文字输入", color = Color(0xFFF59E0B), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp))
                 }
             }
 
