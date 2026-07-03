@@ -66,10 +66,21 @@ class StatusWebSocketManager:
         logger.info(f"[StatusWS] Broadcast status update for user {user_id}")
 
     async def broadcast_emergency(self, user_id: int, user_data: dict, alert_data: dict, event_data: dict):
-        """Broadcast emergency alert to all connected users.
+        """Broadcast emergency alert ONLY to friends/family of the user."""
+        from .database import SessionLocal, Friendship
 
-        This is higher priority - it sends complete details about the emergency.
-        """
+        db = SessionLocal()
+        friend_ids = set()
+        try:
+            friendships = db.query(Friendship).filter(
+                (Friendship.user1_id == user_id) | (Friendship.user2_id == user_id)
+            ).all()
+            for f in friendships:
+                fid = f.user2_id if f.user1_id == user_id else f.user1_id
+                friend_ids.add(fid)
+        finally:
+            db.close()
+
         message = json.dumps({
             "type": "emergency_alert",
             "user_id": user_id,
@@ -79,6 +90,8 @@ class StatusWebSocketManager:
         })
         async with self._lock:
             for uid, connections in list(self._connections.items()):
+                if uid not in friend_ids and uid != user_id:
+                    continue
                 for ws in list(connections):
                     try:
                         if ws.application_state == WebSocketState.CONNECTED:
@@ -86,7 +99,7 @@ class StatusWebSocketManager:
                     except Exception:
                         connections.discard(ws)
 
-        logger.info(f"[StatusWS] Broadcast EMERGENCY for user {user_id}")
+        logger.info(f"[StatusWS] Broadcast EMERGENCY for user {user_id} to {len(friend_ids)} friends")
 
     async def notify_friend_request(self, receiver_id: int, request_data: dict):
         """Send a friend request notification to a specific user."""

@@ -111,7 +111,7 @@ async def stream_chat(
         "model": DOUBAO_MODEL,
         "messages": messages,
         "stream": True,
-        "max_tokens": int(os.getenv("ARK_MAX_TOKENS", "80")),
+        "max_tokens": int(os.getenv("ARK_MAX_TOKENS", "200")),
     }
 
     try:

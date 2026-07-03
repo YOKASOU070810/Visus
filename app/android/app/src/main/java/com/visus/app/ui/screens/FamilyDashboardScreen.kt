@@ -2,6 +2,7 @@ package com.visus.app.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.location.LocationManager
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,12 +28,17 @@ import androidx.compose.ui.unit.sp
 import com.visus.app.data.AuthState
 import com.visus.app.data.SettingsDataStore
 import com.visus.app.network.SocialApiClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.java_websocket.client.WebSocketClient
+import org.java_websocket.handshake.ServerHandshake
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.InputStream
+import java.io.BufferedInputStream
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 
 data class FamilyMemberInfo(
@@ -53,11 +59,11 @@ fun FamilyDashboardScreen() {
     var locationAddress by remember { mutableStateOf("") }
     var showCameraView by remember { mutableStateOf(false) }
     var cameraFrame by remember { mutableStateOf<Bitmap?>(null) }
+    var cameraMemberId by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(false) }
     val settingsDataStore = remember { SettingsDataStore(context) }
     val serverIp by settingsDataStore.serverIp.collectAsState(initial = SettingsDataStore.DEFAULT_IP)
     val serverPort by settingsDataStore.serverPort.collectAsState(initial = SettingsDataStore.DEFAULT_PORT)
-
     val tts = remember { TextToSpeech(context) {} }
 
     fun loadFamily() {
@@ -88,66 +94,88 @@ fun FamilyDashboardScreen() {
         scope.launch {
             try {
                 val token = AuthState.token.value ?: return@launch
-                // Request location via message
+                // Request location from the blind user via message
                 SocialApiClient.post("/api/messages/send", JSONObject().apply {
                     put("receiver_id", member.userId)
                     put("content", "家人请求获取你的位置")
                     put("msg_type", "location_request")
                 }, token)
-                // Try to get current location from status
-                if (member.latitude != null && member.longitude != null) {
-                    // Use reverse geocode via server
-                    val geoResp = SocialApiClient.post("/api/maps/reverse", JSONObject().apply {
-                        put("latitude", member.latitude!!); put("longitude", member.longitude!!)
-                    }, token)
-                    val addr = geoResp.optJSONObject("data")?.optString("address") ?: "未知地址"
-                    locationAddress = addr
+
+                // Get location from member's latest status (latitude/longitude sent by client)
+                if (member.latitude != null && member.longitude != null && member.latitude != 0.0 && member.longitude != 0.0) {
+                    locationAddress = "纬度: ${String.format("%.4f", member.latitude)}, 经度: ${String.format("%.4f", member.longitude)}\n城市: ${member.city ?: "未知"}\n更新时间: ${member.lastUpdated?.take(19)?.replace("T", " ") ?: "未知"}"
                 } else {
-                    locationAddress = "暂无位置数据"
+                    // Try reverse geocode via server (fallback)
+                    try {
+                        val geoResp = SocialApiClient.post("/api/maps/reverse", JSONObject().apply {
+                            put("latitude", member.latitude ?: 0.0)
+                            put("longitude", member.longitude ?: 0.0)
+                        }, token)
+                        val addr = geoResp.optJSONObject("data")?.optString("address") ?: ""
+                        locationAddress = if (addr.isNotBlank()) addr else "该用户尚未上报位置数据\n请提醒视障用户开启位置权限"
+                    } catch (_: Exception) {
+                        locationAddress = "该用户尚未上报位置数据\n请提醒视障用户开启位置权限"
+                    }
                 }
                 showLocationDialog = true
             } catch (e: Exception) { locationAddress = "获取失败: ${e.message}"; showLocationDialog = true }
         }
     }
 
-    fun viewCamera() {
+    fun viewCamera(member: FamilyMemberInfo) {
+        cameraMemberId = member.userId
+        cameraFrame = null
         showCameraView = true
-        // Try to fetch a frame from the server's viewer WebSocket
         scope.launch {
-            while (showCameraView) {
-                try {
-                    val url = URL("http://$serverIp:$serverPort/api/health")
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = 2000; conn.readTimeout = 2000
-                    if (conn.responseCode == 200) {
-                        // Server is up - but actual camera frames require /ws/viewer
-                        // For now show placeholder
+            try {
+                val wsUrl = "ws://$serverIp:$serverPort/ws/viewer"
+                val wsClient = object : WebSocketClient(URI(wsUrl)) {
+                    override fun onOpen(handshakedata: ServerHandshake?) {}
+                    override fun onMessage(message: String?) {}
+                    override fun onMessage(message: java.nio.ByteBuffer?) {
+                        try {
+                            message?.let {
+                                val bytes = ByteArray(it.remaining()); it.get(bytes)
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { bmp ->
+                                    cameraFrame = bmp
+                                }
+                            }
+                        } catch (_: Exception) {}
                     }
-                    conn.disconnect()
-                } catch (_: Exception) {}
-                delay(2000)
-            }
+                    override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                        cameraFrame = null
+                    }
+                    override fun onError(ex: Exception?) {
+                        cameraFrame = null
+                    }
+                }
+                withContext(Dispatchers.IO) { wsClient.connect() }
+                while (showCameraView && wsClient.isOpen) { delay(1000) }
+                wsClient.close()
+            } catch (_: Exception) {}
         }
     }
 
     LaunchedEffect(Unit) { loadFamily() }
+    LaunchedEffect(Unit) {
+        // Poll for family status updates every 10s
+        while (true) { delay(10000); loadFamily() }
+    }
+
+    // Camera status — check if any family member has camera active (alert_type starts with "assist" or status has streaming)
+    fun isCameraActive(member: FamilyMemberInfo): Boolean {
+        return member.alertType != null && member.alertType != "manual"
+    }
 
     if (selectedMember != null) {
-        // Private chat with family member
-        ChatScreen(
-            friendId = selectedMember!!.userId,
-            friendName = selectedMember!!.name,
-            onBack = { selectedMember = null }
-        )
+        ChatScreen(friendId = selectedMember!!.userId, friendName = selectedMember!!.name, onBack = { selectedMember = null })
     } else {
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = { Text("家人守护", fontWeight = FontWeight.Bold) },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF4CAF50)),
-                    actions = {
-                        IconButton(onClick = { loadFamily() }) { Icon(Icons.Default.Refresh, "刷新") }
-                    }
+                    actions = { IconButton(onClick = { loadFamily() }) { Icon(Icons.Default.Refresh, "刷新") } }
                 )
             }
         ) { padding ->
@@ -157,7 +185,7 @@ fun FamilyDashboardScreen() {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("暂无家人", fontSize = 18.sp)
-                            Text("请让视障亲属将您设为家人", fontSize = 14.sp, color = Color.Gray)
+                            Text("在好友列表中点击「设为家人」即可添加", fontSize = 14.sp, color = Color.Gray)
                         }
                     }
                 } else {
@@ -184,20 +212,12 @@ fun FamilyDashboardScreen() {
                                             Text(member.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                             Text(member.email, fontSize = 13.sp, color = Color.Gray)
                                         }
-                                        Badge(
-                                            containerColor = when (member.status) {
-                                                true -> Color(0xFF4CAF50); false -> Color(0xFFE53935); null -> Color.Gray
-                                            }
-                                        ) {
+                                        Badge(containerColor = when (member.status) { true -> Color(0xFF4CAF50); false -> Color(0xFFE53935); null -> Color.Gray }) {
                                             Text(when (member.status) { true -> "安全"; false -> "紧急"; null -> "未知" }, color = Color.White, fontSize = 11.sp)
                                         }
                                     }
-                                    if (!member.city.isNullOrBlank()) {
-                                        Text("📍 ${member.city}", fontSize = 13.sp, color = Color.Gray)
-                                    }
-                                    if (!member.lastUpdated.isNullOrBlank()) {
-                                        Text("更新: ${member.lastUpdated!!.take(19).replace("T"," ")}", fontSize = 11.sp, color = Color.LightGray)
-                                    }
+                                    if (!member.city.isNullOrBlank()) Text("📍 ${member.city}", fontSize = 13.sp, color = Color.Gray)
+                                    if (!member.lastUpdated.isNullOrBlank()) Text("更新: ${member.lastUpdated!!.take(19).replace("T"," ")}", fontSize = 11.sp, color = Color.LightGray)
                                     Spacer(Modifier.height(10.dp))
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(onClick = { requestLocation(member) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
@@ -206,10 +226,18 @@ fun FamilyDashboardScreen() {
                                             Spacer(Modifier.width(4.dp))
                                             Text("位置", fontSize = 13.sp)
                                         }
-                                        OutlinedButton(onClick = { viewCamera() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
+                                        val cameraActive = isCameraActive(member)
+                                        Button(
+                                            onClick = { viewCamera(member) },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (cameraActive) Color(0xFF2196F3) else Color(0xFF9E9E9E)
+                                            )
+                                        ) {
                                             Icon(Icons.Default.Videocam, null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("画面", fontSize = 13.sp)
+                                            Text("画面${if (cameraActive) " ●" else ""}", fontSize = 13.sp)
                                         }
                                         IconButton(onClick = { selectedMember = member }) {
                                             Icon(Icons.Default.Chat, "聊天", tint = Color(0xFF4CAF50))
@@ -243,7 +271,11 @@ fun FamilyDashboardScreen() {
                         Image(cameraFrame!!.asImageBitmap(), "camera", Modifier.fillMaxWidth().height(300.dp), contentScale = ContentScale.Fit)
                     } else {
                         Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                            Text("等待画面...\n请确认视障亲属正在使用导航功能")
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = Color(0xFF6366F1))
+                                Spacer(Modifier.height(12.dp))
+                                Text("等待画面...\n请确认视障亲属正在使用辅助出行功能")
+                            }
                         }
                     }
                 }

@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.visus.app.data.AuthState
 import com.visus.app.network.SocialApiClient
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,7 +28,7 @@ import java.util.*
 data class PrivateMsg(
     val id: Int, val senderId: Int, val content: String,
     val msgType: String, val createdAt: String?, val isRead: Boolean,
-    val senderName: String
+    val senderName: String, val senderEmail: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +41,9 @@ fun ChatScreen(friendId: Int, friendName: String, onBack: () -> Unit) {
     val myId = AuthState.currentUserId.value
     val ctx = LocalContext.current
     val tts = remember { TextToSpeech(ctx) { } }
+    val userType by AuthState.userType.collectAsState()
+    val isBlind = userType == "blind"
+    var lastLoadedMsgIds by remember { mutableStateOf(setOf<Int>()) }
 
     fun load() {
         scope.launch {
@@ -47,14 +51,32 @@ fun ChatScreen(friendId: Int, friendName: String, onBack: () -> Unit) {
                 val token = AuthState.token.value ?: return@launch
                 val resp = SocialApiClient.get("/api/messages/$friendId?limit=100", token)
                 val arr = resp.optJSONObject("data")?.optJSONArray("messages") ?: JSONArray()
-                messages = (0 until arr.length()).map {
+                val newMsgs = (0 until arr.length()).map {
                     val o = arr.getJSONObject(it)
                     val s = o.optJSONObject("sender")
-                    PrivateMsg(o.optInt("id"), o.optInt("sender_id"), o.optString("content"),
+                    PrivateMsg(
+                        o.optInt("id"), o.optInt("sender_id"), o.optString("content"),
                         o.optString("msg_type"), o.optString("created_at"), o.optBoolean("is_read"),
-                        s?.optString("first_name", "") ?: "")
+                        s?.optString("first_name", "") + " " + s?.optString("last_name", ""),
+                        s?.optString("email", "") ?: ""
+                    )
                 }
-                listState.animateScrollToItem(messages.size - 1)
+                messages = newMsgs
+                // Scroll to bottom on first load
+                if (newMsgs.isNotEmpty()) {
+                    delay(200)
+                    listState.animateScrollToItem(newMsgs.size - 1)
+                }
+                // TTS for new incoming messages (not from me)
+                val newIds = newMsgs.map { it.id }.toSet()
+                val brandNew = newMsgs.filter { it.id !in lastLoadedMsgIds && it.senderId != myId }
+                if (isBlind && brandNew.isNotEmpty() && lastLoadedMsgIds.isNotEmpty()) {
+                    for (msg in brandNew) {
+                        tts.language = Locale.CHINESE
+                        tts.speak("${msg.senderName}说: ${msg.content}", TextToSpeech.QUEUE_ADD, null, "chat_${msg.id}")
+                    }
+                }
+                lastLoadedMsgIds = newIds
             } catch (e: Exception) { /* ignore */ }
         }
     }
@@ -74,7 +96,14 @@ fun ChatScreen(friendId: Int, friendName: String, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(friendId) { load() }
+    // Poll for new messages
+    LaunchedEffect(friendId) {
+        load()
+        while (true) {
+            delay(8000)
+            try { load() } catch (_: Exception) {}
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -92,22 +121,36 @@ fun ChatScreen(friendId: Int, friendName: String, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
                     ) {
-                        if (!isMe) Text(msg.senderName, fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                        // Show sender name for all non-me messages
+                        if (!isMe) {
+                            Text(
+                                msg.senderName.ifBlank { friendName },
+                                fontSize = 11.sp, color = Color.Gray,
+                                modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                            )
+                        } else {
+                            Text(
+                                "我",
+                                fontSize = 11.sp, color = Color.Gray,
+                                modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+                            )
+                        }
                         Card(
                             modifier = Modifier.widthIn(max = 280.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = CardDefaults.cardColors(containerColor = if (isMe) Color(0xFFDCF8C6) else Color.White),
                             onClick = {
                                 tts.language = Locale.CHINESE
-                                tts.speak("${msg.senderName}说: ${msg.content}", TextToSpeech.QUEUE_FLUSH, null, "pm_${msg.id}")
+                                val label = if (isMe) "我说" else "${msg.senderName}说"
+                                tts.speak("$label: ${msg.content}", TextToSpeech.QUEUE_FLUSH, null, "pm_${msg.id}")
                             }
                         ) {
                             Column(Modifier.padding(10.dp)) {
                                 Text(msg.content, fontSize = 15.sp)
-                                if (msg.msgType == "location") Text("📍 位置", fontSize = 11.sp, color = Color.Gray)
+                                if (msg.msgType == "location_request") Text("📍 请求位置", fontSize = 11.sp, color = Color.Gray)
                             }
                         }
-                        if (isMe) Text(msg.createdAt?.take(19)?.replace("T", " ") ?: "", fontSize = 10.sp, color = Color.LightGray)
+                        Text(msg.createdAt?.take(19)?.replace("T", " ") ?: "", fontSize = 10.sp, color = Color.LightGray)
                     }
                 }
             }

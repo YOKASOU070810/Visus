@@ -220,6 +220,7 @@ async def api_get_friends(request: Request):
 
             result.append({
                 "user": friend.to_dict(),
+                "is_family": f.is_family,
                 "status": latest.status if latest else None,
                 "alert_type": latest.alert_type if latest else None,
                 "latitude": latest.latitude if latest else None,

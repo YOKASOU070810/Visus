@@ -42,7 +42,7 @@ fun FriendsScreen(
         ChatScreen(friendId = chatId, friendName = chatName, onBack = { showChat = false })
         return
     }
-    // rest unchanged
+
     val friends by SocialState.friends.collectAsState()
     val myStatus by SocialState.myStatus.collectAsState()
     val isLoading by SocialState.isLoadingFriends.collectAsState()
@@ -50,39 +50,29 @@ fun FriendsScreen(
     var showSearchDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val searchResults by SocialState.searchResults.collectAsState()
+    val userType by AuthState.userType.collectAsState()
 
-    // Load friends on first composition
-    LaunchedEffect(Unit) {
-        SocialState.loadFriends()
-    }
+    LaunchedEffect(Unit) { SocialState.loadFriends() }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("好友", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 actions = {
-                    IconButton(onClick = { scope.launch { SocialState.loadFriends() } }) {
-                        Icon(Icons.Default.Refresh, "刷新")
-                    }
-                    IconButton(onClick = { showSearchDialog = true }) {
-                        Icon(Icons.Default.PersonAdd, "添加好友")
-                    }
+                    IconButton(onClick = { scope.launch { SocialState.loadFriends() } }) { Icon(Icons.Default.Refresh, "刷新") }
+                    IconButton(onClick = { showSearchDialog = true }) { Icon(Icons.Default.PersonAdd, "添加好友") }
                 }
             )
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // My Status Card
             MyStatusCard(
                 isSafe = myStatus,
                 onSetSafe = { SocialState.updateMyStatus(true) },
                 onSetUnsafe = { SocialState.updateMyStatus(false) }
             )
 
-            // Pending Requests Button
             val pendingCount = SocialState.requests.collectAsState().value.size
             if (pendingCount > 0) {
                 Surface(
@@ -91,33 +81,22 @@ fun FriendsScreen(
                     color = MaterialTheme.colorScheme.tertiaryContainer,
                     onClick = onNavigateToRequests
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("🔔 $pendingCount 个待处理的好友请求", fontWeight = FontWeight.Medium)
                     }
                 }
             }
 
-            // Error message
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp))
-            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
 
-            // Friends List
             if (isLoading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else if (friends.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("暂无好友", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
-                        TextButton(onClick = { showSearchDialog = true }) {
-                            Text("添加好友")
-                        }
+                        TextButton(onClick = { showSearchDialog = true }) { Text("添加好友") }
                     }
                 }
             } else {
@@ -127,7 +106,9 @@ fun FriendsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(friends, key = { it.user.id }) { friend ->
-                        FriendCard(friend,
+                        FriendCard(
+                            friend,
+                            userType = userType,
                             onChat = {
                                 chatId = friend.user.id
                                 chatName = "${friend.user.firstName} ${friend.user.lastName}"
@@ -137,7 +118,7 @@ fun FriendsScreen(
                                 scope.launch {
                                     try {
                                         val token = AuthState.token.value ?: return@launch
-                                        val resp = SocialApiClient.post("/api/family/set",
+                                        SocialApiClient.post("/api/family/set",
                                             org.json.JSONObject().apply { put("friend_id", friend.user.id) }, token)
                                         SocialState.loadFriends()
                                         android.widget.Toast.makeText(context, "已设为家人", android.widget.Toast.LENGTH_SHORT).show()
@@ -153,45 +134,27 @@ fun FriendsScreen(
         }
     }
 
-    // Search Dialog
     if (showSearchDialog) {
         AlertDialog(
             onDismissRequest = { showSearchDialog = false },
             title = { Text("搜索用户") },
             text = {
                 Column {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = { Text("用户名/邮箱") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("用户名/邮箱") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { SocialState.searchUsers(searchQuery) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("搜索") }
+                    Button(onClick = { SocialState.searchUsers(searchQuery) }, modifier = Modifier.fillMaxWidth()) { Text("搜索") }
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(modifier = Modifier.height(300.dp)) {
                         items(searchResults) { result ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
                                     Text("${result.user.firstName} ${result.user.lastName}", fontWeight = FontWeight.Medium)
                                     Text(result.user.email, fontSize = 13.sp, color = Color.Gray)
                                 }
                                 when {
                                     result.isFriend -> Text("已是好友", color = Color.Green, fontSize = 13.sp)
                                     result.requestPending -> Text("已发送", color = Color.Gray, fontSize = 13.sp)
-                                    else -> TextButton(onClick = {
-                                        SocialState.addFriend(result.user.id) {
-                                            SocialState.searchUsers(searchQuery)
-                                        }
-                                    }) { Text("添加") }
+                                    else -> TextButton(onClick = { SocialState.addFriend(result.user.id) { SocialState.searchUsers(searchQuery) } }) { Text("添加") }
                                 }
                             }
                         }
@@ -205,42 +168,20 @@ fun FriendsScreen(
 
 @Composable
 fun MyStatusCard(isSafe: Boolean?, onSetSafe: () -> Unit, onSetUnsafe: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(12.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth().padding(12.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("我的安全状态", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Button(
-                    onClick = onSetSafe,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isSafe == true) Color(0xFF34A853) else Color.Gray
-                    ),
-                    shape = RoundedCornerShape(10.dp)
-                ) { Text("我安全 ✓") }
-
-                Button(
-                    onClick = onSetUnsafe,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isSafe == false) Color(0xFFE63946) else Color.Gray
-                    ),
-                    shape = RoundedCornerShape(10.dp)
-                ) { Text("需要帮助 !") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onSetSafe, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = if (isSafe == true) Color(0xFF34A853) else Color.Gray), shape = RoundedCornerShape(10.dp)) { Text("我安全 ✓") }
+                Button(onClick = onSetUnsafe, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = if (isSafe == false) Color(0xFFE63946) else Color.Gray), shape = RoundedCornerShape(10.dp)) { Text("需要帮助 !") }
             }
         }
     }
 }
 
 @Composable
-fun FriendCard(friend: FriendInfo, onChat: (() -> Unit)? = null, onSetFamily: (() -> Unit)? = null) {
+fun FriendCard(friend: FriendInfo, userType: String = "blind", onChat: (() -> Unit)? = null, onSetFamily: (() -> Unit)? = null) {
     var showActions by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth().clickable { showActions = !showActions },
@@ -264,7 +205,7 @@ fun FriendCard(friend: FriendInfo, onChat: (() -> Unit)? = null, onSetFamily: ((
                         fontWeight = FontWeight.Bold, fontSize = 13.sp
                     )
                     if (!friend.city.isNullOrBlank()) Text(friend.city!!, fontSize = 12.sp, color = Color.Gray)
-                    if (!friend.lastUpdated.isNullOrBlank()) { val time = friend.lastUpdated!!.takeLast(8).take(5); Text(time, fontSize = 11.sp, color = Color.Gray) }
+                    if (!friend.lastUpdated.isNullOrBlank()) { Text(friend.lastUpdated!!.takeLast(8).take(5), fontSize = 11.sp, color = Color.Gray) }
                 }
             }
             if (showActions) {
@@ -273,6 +214,7 @@ fun FriendCard(friend: FriendInfo, onChat: (() -> Unit)? = null, onSetFamily: ((
                     Button(onClick = { onChat?.invoke() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))) {
                         Text("💬 聊天", fontSize = 12.sp)
                     }
+                    // Both blind and family users can set family
                     OutlinedButton(onClick = { onSetFamily?.invoke() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
                         Text("👨‍👩‍👧 设为家人", fontSize = 12.sp)
                     }
