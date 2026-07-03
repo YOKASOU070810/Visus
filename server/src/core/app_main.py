@@ -1,6 +1,7 @@
 # app_main.py
 # -*- coding: utf-8 -*-
 import os, sys, time, json, asyncio, base64, io, wave, traceback
+from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -28,6 +29,7 @@ try:
     from core.navigation_master import NavigationMaster, OrchestratorResult
     from navigation.workflow_blindpath import BlindPathNavigator
     from navigation.workflow_crossstreet import CrossStreetNavigator
+    from navigation.multimodal_alert import MultimodalAlertManager, build_multimodal_alert
     from ultralytics import YOLO
     from vision.obstacle_detector_client import ObstacleDetectorClient
     _HAS_NAVIGATION = True
@@ -37,12 +39,14 @@ except (ModuleNotFoundError, ImportError) as e:
     OrchestratorResult = None
     BlindPathNavigator = None
     CrossStreetNavigator = None
+    MultimodalAlertManager = None
+    build_multimodal_alert = None
     YOLO = None
     ObstacleDetectorClient = None
     _HAS_NAVIGATION = False
 
 import torch
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
@@ -80,13 +84,15 @@ except Exception:
 from dashscope import audio as dash_audio  # 若未安装，会在原项目里抛错提示
 
 ASR_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-if not ASR_API_KEY:
-    raise RuntimeError("未设置 DASHSCOPE_API_KEY")
-print(
-    f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
-    f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
-    flush=True
-)
+_HAS_ASR = bool(ASR_API_KEY)
+if not _HAS_ASR:
+    print("[ASR] DASHSCOPE_API_KEY not set — voice recognition disabled", flush=True)
+else:
+    print(
+        f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
+        f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
+        flush=True
+    )
 
 MODEL        = "paraformer-realtime-v2"
 SAMPLE_RATE  = 16000
@@ -114,7 +120,8 @@ from voice.asr_core import (
     set_current_recognition,
     stop_current_recognition,
 )
-from voice.audio_player import initialize_audio_system, play_voice_text
+from voice.asr_provider import get_asr_provider
+from voice.audio_player import initialize_audio_system, play_voice_text, clear_voice_queue
 from voice.doubao_tts import synthesize_to_pcm8k
 
 # ---- 同步录制器 ----
@@ -125,17 +132,48 @@ import atexit
 # ---- 社交模块（好友预警 / 紧急通知） ----
 from social.database import init_db
 from social.api_routes import router as social_router
+from social.groups import router as groups_router
+from social.maps import router as maps_router
+from social.ai_agent import router as agent_router
+from social.messaging import router as messaging_router
 from social.status_ws import handle_status_websocket
 
 app = FastAPI()
 
 # 注册社交 API 路由 (/api/login, /api/friends, /api/status, etc.)
 app.include_router(social_router)
+app.include_router(groups_router)
+app.include_router(maps_router)
+app.include_router(agent_router)
+app.include_router(messaging_router)
 
-AI_MIC_SUPPRESS_TAIL_SEC = float(os.getenv("AI_MIC_SUPPRESS_TAIL_SEC", "1.8"))
+ASR_PROVIDER = get_asr_provider()
+AI_MIC_SUPPRESS_TAIL_SEC = float(os.getenv("AI_MIC_SUPPRESS_TAIL_SEC", "0.8"))
+
+APP_FILE = Path(__file__).resolve()
+SRC_DIR = APP_FILE.parents[1]
+SERVER_DIR = APP_FILE.parents[2]
+
+STATIC_CANDIDATES = [
+    SRC_DIR / "web" / "static",
+    SERVER_DIR / "web" / "static",
+]
+STATIC_DIR = next((p for p in STATIC_CANDIDATES if p.exists()), None)
+if STATIC_DIR is None:
+    STATIC_DIR = SERVER_DIR / "web" / "static"
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[WARN] static directory not found, created empty static dir: {STATIC_DIR}", flush=True)
+
+TEMPLATE_CANDIDATES = [
+    SRC_DIR / "web" / "templates" / "index.html",
+    SERVER_DIR / "web" / "templates" / "index.html",
+]
+INDEX_TEMPLATE = next((p for p in TEMPLATE_CANDIDATES if p.exists()), None)
+if INDEX_TEMPLATE is None:
+    print(f"[WARN] index template not found in candidates: {TEMPLATE_CANDIDATES}", flush=True)
 
 # ====== 状态与容器 ======
-app.mount("/static", StaticFiles(directory="../web/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 ui_clients: Dict[int, WebSocket] = {}
 current_partial: str = ""
@@ -145,7 +183,21 @@ last_frames: Deque[Tuple[float, bytes]] = deque(maxlen=10)
 VISUAL_TRIGGER_WORDS = (
     "帮我看", "看看", "识别", "这是什么", "前面有什么", "周围有什么",
     "拍照", "看一下", "能不能吃", "读一下",
+    "前面", "前方", "面前", "眼前", "左边", "右边", "旁边",
+    "有没有", "有一个", "有一扇", "有一把", "是什么", "在哪",
+    "门", "椅子", "桌子", "瓶子", "水", "障碍物", "路况",
 )
+SAFETY_VISUAL_TRIGGER_WORDS = (
+    "走", "能走", "可以走", "过去", "能过去", "前方", "前面", "路况",
+    "安全", "危险", "障碍", "障碍物", "有没有东西", "挡路", "这里",
+    "那里", "下去", "继续走", "往前走", "能不能走", "可以过去吗",
+    "这里安全吗", "前面安全吗", "可以往前走吗", "前面有什么",
+    "有没有障碍物", "能不能过去", "帮我看看路况", "现在能走吗",
+    "前方情况怎么样",
+)
+VISUAL_UNAVAILABLE_REPLY = "我暂时没有看到清晰画面，无法判断前方情况。"
+VISUAL_FRAME_MAX_AGE_SEC = float(os.getenv("VISUS_VISUAL_FRAME_MAX_AGE_SEC", "5.0"))
+SAFETY_SUMMARY_MAX_AGE_SEC = float(os.getenv("VISUS_SAFETY_SUMMARY_MAX_AGE_SEC", "1.0"))
 CAMERA_DISPLAY_ROTATE_DEG = int(os.getenv("CAMERA_DISPLAY_ROTATE_DEG", "90"))
 
 camera_viewers: Set[WebSocket] = set()
@@ -162,6 +214,17 @@ obstacle_detector = None
 cross_street_navigator = None
 cross_street_active = False
 orchestrator = None  # 新增
+safety_alert_manager = MultimodalAlertManager() if MultimodalAlertManager else None
+safety_last_detection_frame = 0
+safety_last_detection_time = 0.0
+safety_last_alert_time = 0.0
+safety_monitor_task: Optional[asyncio.Task] = None
+latest_camera_frame: Optional[np.ndarray] = None
+latest_camera_frame_ts = 0.0
+latest_camera_frame_seq = 0
+latest_camera_frame_size = 0
+latest_safety_summary: Optional[Dict[str, Any]] = None
+_safety_last_diag_log: Dict[str, float] = {}
 
 # 【新增】omni对话状态标志
 omni_conversation_active = False  # 标记omni对话是否正在进行
@@ -377,6 +440,13 @@ async def ui_broadcast_final(text: str):
     print(f"[ASR/AI FINAL] {text}", flush=True)
 
 async def ui_broadcast_ai_reply(text: str, tts_fallback: bool = False):
+    global current_partial, recent_finals
+    display_text = "[AI] " + text.strip()
+    current_partial = ""
+    if display_text.strip():
+        recent_finals.append(display_text)
+        if len(recent_finals) > RECENT_MAX:
+            recent_finals = recent_finals[-RECENT_MAX:]
     payload = {
         "type": "ai_reply",
         "text": text,
@@ -388,9 +458,306 @@ async def ui_broadcast_status(stage: str):
     payload = {"type": "status", "stage": stage}
     await ui_broadcast_raw(json.dumps(payload, ensure_ascii=False))
 
+async def ui_broadcast_multimodal_alert(alert: dict):
+    if not alert:
+        return
+    try:
+        payload = dict(alert)
+        payload["type"] = "multimodal_alert"
+        if len(ui_clients) == 0:
+            print("[MULTIMODAL_ALERT] no ui clients connected", flush=True)
+        await ui_broadcast_raw(json.dumps(payload, ensure_ascii=False))
+        print(f"[MULTIMODAL_ALERT] broadcast clients={len(ui_clients)}", flush=True)
+        print(
+            f"[MULTIMODAL_ALERT] broadcast to {len(ui_clients)} ui clients: "
+            f"level={payload.get('level')} text={payload.get('text')}",
+            flush=True
+        )
+    except Exception as e:
+        print(f"[MULTIMODAL_ALERT] broadcast failed: {repr(e)}", flush=True)
+
+
+def update_latest_camera_frame(bgr: np.ndarray, raw_size: int, frame_counter: int):
+    global latest_camera_frame, latest_camera_frame_ts, latest_camera_frame_seq, latest_camera_frame_size
+    latest_camera_frame = bgr.copy()
+    latest_camera_frame_ts = time.time()
+    latest_camera_frame_seq = frame_counter
+    latest_camera_frame_size = raw_size
+    if frame_counter <= 3 or frame_counter % 30 == 0:
+        print(f"[SAFETY_MONITOR] latest frame updated size={raw_size}", flush=True)
+
+
+def _fake_obstacles_for_frame(bgr: np.ndarray):
+    h, w = bgr.shape[:2]
+    return [{
+        "name": "box",
+        "area_ratio": 0.12,
+        "center_x": w * 0.5,
+        "center_y": h * 0.7,
+        "bottom_y_ratio": 0.88,
+        "confidence": 1.0,
+    }]
+
+
+def safety_log_limited(key: str, message: str, interval_sec: float = 2.0):
+    now = time.time()
+    last = _safety_last_diag_log.get(key, 0.0)
+    if now - last >= interval_sec:
+        _safety_last_diag_log[key] = now
+        print(message, flush=True)
+
+
+async def _emit_safety_alert(alert: dict, detect_start: float):
+    global safety_last_alert_time
+    safety_last_alert_time = time.time()
+    level = str(alert.get("level", "medium"))
+    text = alert.get("text", "")
+
+    if level == "critical":
+        print("[AUDIO_QUEUE] clear for critical alert", flush=True)
+        try:
+            clear_voice_queue("for critical alert")
+            await soft_reset_audio("critical safety alert")
+        except Exception as e:
+            print(f"[AUDIO_QUEUE] clear failed for critical alert: {repr(e)}", flush=True)
+
+    try:
+        print(f"[AUDIO_QUEUE] enqueue safety alert level={level} text={text}", flush=True)
+        tts_start = time.perf_counter()
+        play_voice_text(text)
+        print(f"[PERF_TTS] safety_tts_ms={(time.perf_counter() - tts_start) * 1000:.1f}", flush=True)
+    except Exception as e:
+        print(f"[MULTIMODAL_ALERT] voice failed: {repr(e)}", flush=True)
+
+    await ui_broadcast_multimodal_alert(alert)
+    print(f"[PERF] safety_alert_latency_ms={(time.perf_counter() - detect_start) * 1000:.1f}", flush=True)
+
+
+async def safety_monitor_loop():
+    if os.getenv("VISUS_SAFETY_ALWAYS_ON", "0") != "1":
+        print("[SAFETY_MONITOR] always-on monitor disabled; set VISUS_SAFETY_ALWAYS_ON=1 to enable", flush=True)
+        return
+    if safety_alert_manager is None:
+        print("[SAFETY_MONITOR] detector disabled", flush=True)
+        return
+
+    interval_ms = max(300.0, min(800.0, float(os.getenv("VISUS_SAFETY_MONITOR_INTERVAL_MS", "800"))))
+    fake_enabled = os.getenv("VISUS_FAKE_OBSTACLE", "0") == "1"
+    last_fake_ts = 0.0
+    last_seq = -1
+    print("[SAFETY_MONITOR] started", flush=True)
+    print("[SAFETY_MONITOR] camera connected, starting always-on monitor", flush=True)
+
+    try:
+        while True:
+            await asyncio.sleep(interval_ms / 1000.0)
+            frame = latest_camera_frame
+            frame_ts = latest_camera_frame_ts
+            frame_seq = latest_camera_frame_seq
+            if frame is None or frame_ts <= 0:
+                safety_log_limited("no_frame", "[SAFETY_MONITOR] tick no latest frame")
+                continue
+
+            age_ms = (time.time() - frame_ts) * 1000.0
+            safety_log_limited("tick", f"[SAFETY_MONITOR] tick frame_age_ms={age_ms:.1f}", 1.0)
+            if frame_seq == last_seq and age_ms > 1500:
+                continue
+            last_seq = frame_seq
+
+            detect_start = time.perf_counter()
+            h, w = frame.shape[:2]
+
+            if fake_enabled:
+                now = time.time()
+                if now - last_fake_ts < 2.0:
+                    continue
+                last_fake_ts = now
+                obstacles = _fake_obstacles_for_frame(frame)
+                print(f"[SAFETY_MONITOR] fake obstacle generated count={len(obstacles)}", flush=True)
+            else:
+                if os.getenv("SKIP_OBSTACLE_DETECTOR", "1") == "1":
+                    safety_log_limited("skip_detector", "[SAFETY_MONITOR] real detector skipped by SKIP_OBSTACLE_DETECTOR=1")
+                    safety_log_limited("skip_detector_detail", "[DETECTOR] enabled=false model_loaded=false reason=SKIP_OBSTACLE_DETECTOR=1")
+                    continue
+                if obstacle_detector is None:
+                    safety_log_limited("detector_disabled", "[SAFETY_MONITOR] detector disabled")
+                    safety_log_limited("detector_disabled_detail", "[DETECTOR] enabled=false model_loaded=false")
+                    continue
+                try:
+                    print("[DETECTOR] enabled=true model_loaded=true", flush=True)
+                    obstacles = await asyncio.to_thread(obstacle_detector.detect, frame)
+                except Exception as e:
+                    print(f"[SAFETY_MONITOR] detector failed: {repr(e)}", flush=True)
+                    print(f"[DETECTOR] no obstacle after filtering reason=detector_failed:{repr(e)}", flush=True)
+                    continue
+
+            obstacles = obstacles or []
+            print(f"[DETECTOR] raw_count={len(obstacles)}", flush=True)
+            for obs in obstacles:
+                print(
+                    f"[DETECTOR] obs name={obs.get('name')} conf={obs.get('confidence')} "
+                    f"area_ratio={obs.get('area_ratio')} bottom_y_ratio={obs.get('bottom_y_ratio')} "
+                    f"center_x={obs.get('center_x')}",
+                    flush=True,
+                )
+            print(f"[SAFETY_MONITOR] detected obstacles count={len(obstacles)}", flush=True)
+            if not obstacles:
+                safety_log_limited("no_obstacles", "[SAFETY_MONITOR] no obstacles from detector")
+                safety_log_limited("no_obstacles_detail", "[DETECTOR] no obstacle after filtering reason=empty_result")
+
+            alert_candidates = []
+            if build_multimodal_alert:
+                for obs in obstacles:
+                    alert_candidate = build_multimodal_alert(obs, w, h)
+                    if alert_candidate:
+                        alert_candidates.append(alert_candidate)
+            print(f"[DETECTOR] filtered_count={len(alert_candidates)}", flush=True)
+            chosen_alert = None
+            if alert_candidates:
+                level_rank = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+                chosen_alert = max(
+                    alert_candidates,
+                    key=lambda item: (
+                        level_rank.get(item.get("level", "low"), 0),
+                        float(item.get("bottom_y_ratio", 0.0)),
+                        float(item.get("area_ratio", 0.0)),
+                    ),
+                )
+                print(f"[DETECTOR] chosen_obstacle={json.dumps(chosen_alert, ensure_ascii=False)}", flush=True)
+            elif obstacles:
+                print("[DETECTOR] no obstacle after filtering reason=below_alert_threshold", flush=True)
+
+            update_latest_safety_summary(obstacles, w, h, chosen_alert)
+
+            alert = safety_alert_manager.process_obstacles(obstacles, w, h)
+            if alert:
+                print(f"[SAFETY_MONITOR] alert emitted level={alert.get('level')}", flush=True)
+                await _emit_safety_alert(alert, detect_start)
+            else:
+                print("[SAFETY_MONITOR] alert skipped by cooldown", flush=True)
+    except asyncio.CancelledError:
+        print("[SAFETY_MONITOR] camera disconnected, stopping always-on monitor", flush=True)
+        raise
+    except Exception as e:
+        print(f"[SAFETY_MONITOR] loop failed: {repr(e)}", flush=True)
+
 def should_attach_image(user_text: str) -> bool:
     text = (user_text or "").strip()
-    return bool(text) and any(word in text for word in VISUAL_TRIGGER_WORDS)
+    if not text:
+        return False
+    if any(word in text for word in SAFETY_VISUAL_TRIGGER_WORDS):
+        print("[VISION_QA] safety_question=true attach_image=true reason=safety_keyword", flush=True)
+        return True
+    return any(word in text for word in VISUAL_TRIGGER_WORDS)
+
+
+def is_safety_question(user_text: str) -> bool:
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    matched = next((word for word in SAFETY_VISUAL_TRIGGER_WORDS if word in text), None)
+    if matched:
+        print(f"[SAFETY_QA] safety_question=true reason={matched}", flush=True)
+        return True
+    return False
+
+
+def _summary_is_fresh(summary: Optional[Dict[str, Any]], max_age_sec: float = SAFETY_SUMMARY_MAX_AGE_SEC) -> bool:
+    if not summary:
+        return False
+    ts = float(summary.get("ts", 0.0) or 0.0)
+    return ts > 0 and (time.time() - ts) <= max_age_sec
+
+
+def update_latest_safety_summary(obstacles, frame_width: int, frame_height: int, chosen_alert: Optional[dict] = None):
+    global latest_safety_summary
+    now = time.time()
+    if chosen_alert:
+        latest_safety_summary = {
+            "ts": now,
+            "frame_age_ms": (now - latest_camera_frame_ts) * 1000.0 if latest_camera_frame_ts else None,
+            "has_obstacle": True,
+            "level": chosen_alert.get("level"),
+            "direction": chosen_alert.get("direction"),
+            "obstacle": chosen_alert.get("obstacle"),
+            "obstacle_cn": chosen_alert.get("obstacle_cn"),
+            "text": chosen_alert.get("text"),
+            "bottom_y_ratio": chosen_alert.get("bottom_y_ratio"),
+            "area_ratio": chosen_alert.get("area_ratio"),
+            "alert": dict(chosen_alert),
+        }
+    elif obstacles:
+        latest_safety_summary = {
+            "ts": now,
+            "frame_age_ms": (now - latest_camera_frame_ts) * 1000.0 if latest_camera_frame_ts else None,
+            "has_obstacle": False,
+            "text": "当前没有检测到明显障碍，但请慢慢前进，我会继续观察。",
+            "raw_count": len(obstacles),
+        }
+    else:
+        latest_safety_summary = {
+            "ts": now,
+            "frame_age_ms": (now - latest_camera_frame_ts) * 1000.0 if latest_camera_frame_ts else None,
+            "has_obstacle": False,
+            "text": "当前没有检测到明显障碍，但请慢慢前进，我会继续观察。",
+            "raw_count": 0,
+        }
+    print(f"[SAFETY_MONITOR] latest_safety_summary={json.dumps(latest_safety_summary, ensure_ascii=False)}", flush=True)
+
+
+async def answer_safety_question_from_summary(user_text: str) -> Optional[str]:
+    if not is_safety_question(user_text):
+        return None
+
+    qa_start = time.perf_counter()
+    summary = latest_safety_summary
+    if not _summary_is_fresh(summary):
+        answer = VISUAL_UNAVAILABLE_REPLY
+        print("[SAFETY_QA] no fresh latest_safety_summary", flush=True)
+        print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
+        print("[PERF_AI] skipped_for_safety_question", flush=True)
+        return answer
+
+    print("[SAFETY_QA] using latest_safety_summary", flush=True)
+    if summary.get("has_obstacle"):
+        answer = str(summary.get("text") or "前方有障碍物，请注意避让")
+        alert = summary.get("alert")
+        if isinstance(alert, dict):
+            print("[SAFETY_QA] obstacle found, emitting alert from user question", flush=True)
+            alert = dict(alert)
+            alert["ts"] = time.time()
+            await ui_broadcast_multimodal_alert(alert)
+        print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
+        print("[PERF_AI] skipped_for_safety_question", flush=True)
+        return answer
+
+    answer = "当前没有检测到明显障碍，但请慢慢前进，我会继续观察。"
+    print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
+    print("[PERF_AI] skipped_for_safety_question", flush=True)
+    return answer
+
+
+def get_latest_camera_jpeg(max_age_sec: float = VISUAL_FRAME_MAX_AGE_SEC) -> Optional[bytes]:
+    if not last_frames:
+        return None
+    ts, jpeg_bytes = last_frames[-1]
+    if time.time() - ts > max_age_sec:
+        return None
+    return jpeg_bytes
+
+
+async def emit_ai_reply_without_llm(text: str):
+    await soft_reset_audio("visual_guard_fallback")
+    try:
+        play_voice_text(text)
+    except Exception as e:
+        print(f"[AI GUARD] fallback voice failed: {repr(e)}", flush=True)
+    try:
+        await ui_broadcast_ai_reply(text, tts_fallback=False)
+        await ui_broadcast_final("[AI] " + text)
+        await ui_broadcast_status("idle")
+    except Exception as e:
+        print(f"[AI GUARD] fallback UI failed: {repr(e)}", flush=True)
 
 def _rotate_bgr_for_display(bgr):
     if bgr is None:
@@ -630,6 +997,11 @@ async def start_ai_with_text_custom(user_text: str):
             await ui_broadcast_final("[系统] 导航统领器未初始化")
         return    
 
+    safety_answer = await answer_safety_question_from_summary(user_text)
+    if safety_answer:
+        await emit_ai_reply_without_llm(safety_answer)
+        return
+
     # 检查是否是"帮我找/识别一下xxx"的命令
     # 扩展正则表达式，支持更多关键词
     find_pattern = r"(?:^\s*帮我)?\s*找一下\s*(.+?)(?:。|！|？|$)"
@@ -710,6 +1082,14 @@ async def start_ai_with_text_custom(user_text: str):
 async def start_ai_with_text(user_text: str):
     """硬重置后，开启新的 AI 语音输出。"""
     fallback_reply = "抱歉，我刚刚没有听清，请再说一遍。"
+    attach_image_request = should_attach_image(user_text)
+    visual_jpeg: Optional[bytes] = None
+    if attach_image_request:
+        visual_jpeg = get_latest_camera_jpeg()
+        if visual_jpeg is None:
+            print("[AI GUARD] visual request without fresh camera frame; refusing to guess", flush=True)
+            await emit_ai_reply_without_llm(VISUAL_UNAVAILABLE_REPLY)
+            return
 
     def _to_stream_pcm(audio_bytes: bytes, rate_state):
         if not audio_bytes:
@@ -743,6 +1123,7 @@ async def start_ai_with_text(user_text: str):
         ai_start_ts = time.perf_counter()
         mark_audio_reply_start(ai_start_ts)
         print(f"[PERF] ai_start_at={ai_start_ts:.6f}", flush=True)
+        print("[PERF_AI] llm_start", flush=True)
         first_text_logged = False
         first_audio_logged = False
         first_speaking_status = False
@@ -797,31 +1178,55 @@ async def start_ai_with_text(user_text: str):
                 "以下是用户当前语音请求。请遵循系统提示词，为视力障碍用户提供出行辅助，回答适合语音播报。"
             )
         }]
-        attach_image = should_attach_image(user_text)
-        if attach_image and last_frames:
+        attach_image = attach_image_request
+        if attach_image and visual_jpeg:
             try:
-                _, jpeg_bytes = last_frames[-1]
-                small_jpeg = compress_camera_jpeg(jpeg_bytes)
+                small_jpeg = compress_camera_jpeg(visual_jpeg)
                 img_b64 = base64.b64encode(small_jpeg).decode("ascii")
                 content_list.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
                 })
-                print(f"[AI] attach_image=true jpeg={len(jpeg_bytes)} compressed={len(small_jpeg)}", flush=True)
-            except Exception:
-                pass
+                print(f"[AI] attach_image=true jpeg={len(visual_jpeg)} compressed={len(small_jpeg)}", flush=True)
+            except Exception as e:
+                print(f"[AI GUARD] image attach failed: {repr(e)}", flush=True)
+                try:
+                    await pcm_queue.put(None)
+                    await playback_task
+                except Exception:
+                    pass
+                await emit_ai_reply_without_llm(VISUAL_UNAVAILABLE_REPLY)
+                return
         else:
             print("[AI] attach_image=false", flush=True)
         content_list.append({"type": "text", "text": user_text})
 
         try:
             await ui_broadcast_status("thinking")
-            async for piece in stream_chat(content_list, voice="Cherry", audio_format="wav", include_audio=True):
+            stream_iter = stream_chat(content_list, voice="Cherry", audio_format="wav", include_audio=True).__aiter__()
+            while True:
+                try:
+                    piece = await asyncio.wait_for(
+                        stream_iter.__anext__(),
+                        timeout=3.0 if not first_text_logged else 20.0,
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    if not first_text_logged:
+                        print("[PERF_AI] first_token_timeout fallback", flush=True)
+                        txt_buf.clear()
+                        txt_buf.append("我正在处理，请稍等。")
+                        break
+                    raise
                 # 文本增量（仅 UI）
                 if piece.text_delta:
                     if not first_text_logged:
                         first_text_logged = True
-                        print(f"[PERF] ai_start_to_first_text={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
+                        first_token_ms = (time.perf_counter() - ai_start_ts) * 1000
+                        print(f"[PERF] ai_start_to_first_text={first_token_ms:.1f} ms", flush=True)
+                        print(f"[PERF] llm_first_token_ms={first_token_ms:.1f}", flush=True)
+                        print(f"[PERF_AI] first_token_ms={first_token_ms:.1f}", flush=True)
                     txt_buf.append(piece.text_delta)
                     try:
                         await ui_broadcast_partial("[AI] " + "".join(txt_buf))
@@ -883,6 +1288,8 @@ async def start_ai_with_text(user_text: str):
             if final_text and not audio_sent:
                 try:
                     tts_start_ts = time.perf_counter()
+                    print(f"[PERF] tts_start_ms={(tts_start_ts - ai_start_ts) * 1000:.1f}", flush=True)
+                    print("[PERF_TTS] tts_start", flush=True)
                     tts_pcm = await asyncio.to_thread(synthesize_to_pcm8k, final_text)
                     if tts_pcm:
                         audio_sent = True
@@ -890,20 +1297,24 @@ async def start_ai_with_text(user_text: str):
                         ai_speaking_until = time.monotonic() + duration_sec + AI_MIC_SUPPRESS_TAIL_SEC
                         await ui_broadcast_status("speaking")
                         await broadcast_pcm16_realtime(tts_pcm)
-                        print(f"[PERF] doubao_tts_time={(time.perf_counter() - tts_start_ts) * 1000:.1f} ms", flush=True)
+                        tts_total_ms = (time.perf_counter() - tts_start_ts) * 1000
+                        print(f"[PERF] doubao_tts_time={tts_total_ms:.1f} ms", flush=True)
+                        print(f"[PERF_TTS] first_audio_ms={tts_total_ms:.1f}", flush=True)
+                        print(f"[PERF_TTS] total_ms={tts_total_ms:.1f}", flush=True)
                 except Exception as e:
                     print(f"[DOUBAO TTS] playback failed: {repr(e)}", flush=True)
             try:
                 from voice.audio_stream import stream_clients
                 has_audio_client = any(not sc.abort_event.is_set() for sc in list(stream_clients))
                 await ui_broadcast_ai_reply(final_text, tts_fallback=(not audio_sent or not has_audio_client))
-                await ui_broadcast_final("[AI] " + final_text)
                 if ai_speaking_until > time.monotonic():
                     await asyncio.sleep(ai_speaking_until - time.monotonic())
                 await ui_broadcast_status("idle")
             except Exception as e:
                 print(f"[AI UI ERROR] failed to broadcast final reply: {repr(e)}", flush=True)
-            print(f"[PERF] total_reply_time={(time.perf_counter() - ai_start_ts) * 1000:.1f} ms", flush=True)
+            ai_total_ms = (time.perf_counter() - ai_start_ts) * 1000
+            print(f"[PERF] total_reply_time={ai_total_ms:.1f} ms", flush=True)
+            print(f"[PERF_AI] total_ms={ai_total_ms:.1f}", flush=True)
 
     # 真正启动前先硬重置，保证**绝无**旧音频残留
     await soft_reset_audio("start_ai_with_text")
@@ -915,12 +1326,44 @@ async def start_ai_with_text(user_text: str):
 # ---------- 页面 / 健康 ----------
 @app.get("/", response_class=HTMLResponse)
 def root():
-    with open(os.path.join("..", "web", "templates", "index.html"), "r", encoding="utf-8") as f:
+    if INDEX_TEMPLATE is None:
+        return HTMLResponse("<html><body><h1>Visus server is running</h1></body></html>")
+    with INDEX_TEMPLATE.open("r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 @app.get("/api/health", response_class=PlainTextResponse)
 def health():
     return "OK"
+
+@app.get("/api/debug/multimodal_alert")
+async def debug_multimodal_alert(level: str = "critical"):
+    if os.getenv("VISUS_DEBUG_ALERT", "0") != "1":
+        raise HTTPException(status_code=403, detail="debug disabled")
+
+    normalized_level = (level or "critical").strip().lower()
+    if normalized_level not in {"low", "medium", "high", "critical"}:
+        normalized_level = "critical"
+
+    text_by_level = {
+        "low": "前方发现障碍物，请注意",
+        "medium": "前方有障碍物，请注意避让",
+        "high": "前方障碍物较近，请减速",
+        "critical": "正前方障碍物很近，请立即停下",
+    }
+    alert = {
+        "type": "multimodal_alert",
+        "level": normalized_level,
+        "text": text_by_level[normalized_level],
+        "obstacle": "debug_obstacle",
+        "obstacle_cn": "障碍物",
+        "direction": "center",
+        "bottom_y_ratio": 0.9 if normalized_level == "critical" else 0.75,
+        "area_ratio": 0.18 if normalized_level == "critical" else 0.08,
+        "speak": False,
+        "vibrate": True,
+    }
+    await ui_broadcast_multimodal_alert(alert)
+    return {"ok": True, "sent": True, "clients": len(ui_clients), "alert": alert}
 
 # 注册 /stream.wav
 register_stream_route(app)
@@ -947,6 +1390,7 @@ async def ws_audio(ws: WebSocket):
     mobile_audio_ws = ws
     await ws.accept()
     print("\n[AUDIO] client connected")
+    print("[PERF_ASR] audio_ws_connected", flush=True)
     recognition = None
     streaming = False
     last_ts = time.monotonic()
@@ -954,6 +1398,8 @@ async def ws_audio(ws: WebSocket):
     audio_sender_task: Optional[asyncio.Task] = None
     audio_frame_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=40)
     audio_chunk_count = 0
+    audio_bytes_window = 0
+    audio_bytes_window_ts = time.monotonic()
     sent_frame_count = 0
     pcm_buffer = bytearray()
     pending_audio_chunks: Deque[bytes] = deque(maxlen=ASR_PENDING_MAX_CHUNKS)
@@ -1135,6 +1581,7 @@ async def ws_audio(ws: WebSocket):
 
                 if cmd == "START":
                     print("[AUDIO] START received")
+                    print("[PERF_ASR] ASR START received from client", flush=True)
                     await stop_rec()
                     loop = asyncio.get_running_loop()
                     def post(coro):
@@ -1177,6 +1624,7 @@ async def ws_audio(ws: WebSocket):
                         await ui_broadcast_partial("（已开始接收音频…）")
                         await ui_broadcast_status("listening")
                         await ws.send_text("OK:STARTED")
+                        print("[PERF_ASR] ASR START sent OK:STARTED", flush=True)
                         await flush_pending_audio()
                     except Exception as e:
                         streaming = False
@@ -1212,6 +1660,12 @@ async def ws_audio(ws: WebSocket):
             elif "bytes" in msg and msg["bytes"] is not None:
                 audio_chunk_count += 1
                 data = msg["bytes"]
+                audio_bytes_window += len(data)
+                now_audio = time.monotonic()
+                if now_audio - audio_bytes_window_ts >= 1.0:
+                    print(f"[PERF_ASR] audio_bytes_per_sec={audio_bytes_window}", flush=True)
+                    audio_bytes_window = 0
+                    audio_bytes_window_ts = now_audio
                 if is_playing_now():
                     if audio_chunk_count <= 5 or audio_chunk_count % 50 == 0:
                         print("[AUDIO] dropping mic chunk while AI is speaking", flush=True)
@@ -1241,7 +1695,7 @@ async def ws_audio(ws: WebSocket):
 # ---------- WebSocket：移动端相机入口（JPEG 二进制） ----------
 @app.websocket("/ws/camera")
 async def ws_camera_mobile(ws: WebSocket):
-    global mobile_camera_ws, blind_path_navigator, cross_street_navigator, cross_street_active, navigation_active, orchestrator
+    global mobile_camera_ws, blind_path_navigator, cross_street_navigator, cross_street_active, navigation_active, orchestrator, safety_monitor_task
     if mobile_camera_ws is not None:
         try:
             await mobile_camera_ws.close(code=1001, reason="new client")
@@ -1251,6 +1705,12 @@ async def ws_camera_mobile(ws: WebSocket):
     mobile_camera_ws = ws
     await ws.accept()
     print("[CAMERA] client connected")
+
+    if os.getenv("VISUS_SAFETY_ALWAYS_ON", "0") == "1":
+        if safety_monitor_task is None or safety_monitor_task.done():
+            safety_monitor_task = asyncio.create_task(safety_monitor_loop())
+    else:
+        print("[SAFETY_MONITOR] VISUS_SAFETY_ALWAYS_ON not enabled; active safety monitor will not start", flush=True)
     
     # 【新增】初始化盲道导航器
     if blind_path_navigator is None and yolo_seg_model is not None:
@@ -1325,6 +1785,9 @@ async def ws_camera_mobile(ws: WebSocket):
                         print(f"[JPEG] 解码异常: {e}")
                     bgr = None
 
+                if bgr is not None:
+                    update_latest_camera_frame(bgr, len(data), frame_counter)
+
                 # 【托管】优先交给统领状态机（寻物未占用画面时）
                 # 【修改】找物品模式时不执行导航处理，让yolomedia接管画面
                 if orchestrator and not yolomedia_running and bgr is not None:
@@ -1357,6 +1820,15 @@ async def ws_camera_mobile(ws: WebSocket):
                         else:
                             # 其他模式：正常的导航处理
                             res = orchestrator.process_frame(bgr)
+
+                            latest_alert = None
+                            try:
+                                extras = res.extras or {}
+                                latest_alert = extras.get("latest_alert") or extras.get("multimodal_alert")
+                            except Exception:
+                                latest_alert = None
+                            if latest_alert:
+                                await ui_broadcast_multimodal_alert(latest_alert)
 
                             # 语音引导（内部已节流）
                             # 注：omni对话时已切换到CHAT模式，不会生成导航语音
@@ -1422,6 +1894,15 @@ async def ws_camera_mobile(ws: WebSocket):
         except Exception:
             pass
         mobile_camera_ws = None
+        if safety_monitor_task and not safety_monitor_task.done():
+            safety_monitor_task.cancel()
+            try:
+                await safety_monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        safety_monitor_task = None
         print("[CAMERA] Mobile client disconnected")
         
         # 【新增】清理导航状态

@@ -202,6 +202,7 @@ async def _doubao_agent(text: str, user_id: int, lat: float, lng: float, city: s
 
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message", {})
+    content = (message.get("content") or "").strip()
 
     # Check for function call
     tool_calls = message.get("tool_calls", [])
@@ -212,12 +213,28 @@ async def _doubao_agent(text: str, user_id: int, lat: float, lng: float, city: s
             params = json.loads(tc["function"]["arguments"])
         except Exception:
             params = {}
-        return {"action": func_name, "params": params,
-                "reply_text": message.get("content", "") or f"好的，正在执行{func_name}。"}
+        # Also try to extract reply_text from content if it's JSON
+        reply = content or f"好的，正在执行{func_name}。"
+        try:
+            parsed = json.loads(content)
+            reply = parsed.get("reply_text", reply)
+        except Exception:
+            pass
+        return {"action": func_name, "params": params, "reply_text": reply}
 
-    # No function call - plain chat response
+    # No function call — try to parse the model's JSON response
+    try:
+        parsed = json.loads(content)
+        return {
+            "action": parsed.get("action", "chat"),
+            "params": parsed.get("params", {}),
+            "reply_text": parsed.get("reply_text", content),
+        }
+    except Exception:
+        pass
+
     return {"action": "chat", "params": {},
-            "reply_text": message.get("content", f"Visus收到：{text}")}
+            "reply_text": content or f"Visus收到：{text}"}
 
 
 @router.post("/command")
