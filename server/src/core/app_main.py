@@ -145,6 +145,9 @@ last_frames: Deque[Tuple[float, bytes]] = deque(maxlen=10)
 VISUAL_TRIGGER_WORDS = (
     "帮我看", "看看", "识别", "这是什么", "前面有什么", "周围有什么",
     "拍照", "看一下", "能不能吃", "读一下",
+    "前面", "前方", "面前", "眼前", "左边", "右边", "旁边",
+    "有没有", "有一个", "有一扇", "有一把", "是什么", "在哪",
+    "门", "椅子", "桌子", "瓶子", "水", "障碍物", "路况",
 )
 CAMERA_DISPLAY_ROTATE_DEG = int(os.getenv("CAMERA_DISPLAY_ROTATE_DEG", "90"))
 
@@ -377,6 +380,13 @@ async def ui_broadcast_final(text: str):
     print(f"[ASR/AI FINAL] {text}", flush=True)
 
 async def ui_broadcast_ai_reply(text: str, tts_fallback: bool = False):
+    global current_partial, recent_finals
+    display_text = "[AI] " + text.strip()
+    current_partial = ""
+    if display_text.strip():
+        recent_finals.append(display_text)
+        if len(recent_finals) > RECENT_MAX:
+            recent_finals = recent_finals[-RECENT_MAX:]
     payload = {
         "type": "ai_reply",
         "text": text,
@@ -897,7 +907,6 @@ async def start_ai_with_text(user_text: str):
                 from voice.audio_stream import stream_clients
                 has_audio_client = any(not sc.abort_event.is_set() for sc in list(stream_clients))
                 await ui_broadcast_ai_reply(final_text, tts_fallback=(not audio_sent or not has_audio_client))
-                await ui_broadcast_final("[AI] " + final_text)
                 if ai_speaking_until > time.monotonic():
                     await asyncio.sleep(ai_speaking_until - time.monotonic())
                 await ui_broadcast_status("idle")

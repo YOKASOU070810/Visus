@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.visus.app.MainActivity
 import com.visus.app.R
@@ -78,7 +79,13 @@ class EmergencyNotificationService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
-        startForeground(NOTIFY_SOS_ID + 1, silentNotification)
+        try {
+            startForeground(NOTIFY_SOS_ID + 1, silentNotification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to start foreground emergency service", e)
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
 
         // Connect to social WebSocket to listen for emergencies
         connectWebSocket(serverUrl, token)

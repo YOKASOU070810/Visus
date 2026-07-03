@@ -39,6 +39,8 @@ object StreamingUiState {
     fun addFinalMessage(value: String) {
         val text = value.trim()
         if (text.isEmpty()) return
+        val last = _finalMessages.value.lastOrNull()?.trim()
+        if (last == text) return
         _finalMessages.value = (_finalMessages.value + text).takeLast(30)
     }
 

@@ -2,6 +2,7 @@ package com.visus.app.ui.screens
 
 import android.graphics.Bitmap
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -93,9 +94,13 @@ fun HomeScreen(
         token?.let { SocialApiClient.setToken(it) }
         // Start emergency notification service (listens for SOS in background)
         if (token != null) {
-            com.visus.app.service.EmergencyNotificationService.start(
-                context, "http://$serverIp:$serverPort", token
-            )
+            try {
+                com.visus.app.service.EmergencyNotificationService.start(
+                    context, "http://$serverIp:$serverPort", token
+                )
+            } catch (e: Exception) {
+                Log.e("HomeScreen", "Failed to start emergency notification service", e)
+            }
         }
     }
     // Periodic unread count check

@@ -58,6 +58,7 @@ def _extract_sentence(event_obj: Any) -> Tuple[Optional[str], Optional[bool]]:
 INTERRUPT_KEYWORDS = set(
     os.getenv("INTERRUPT_KEYWORDS", "停下,别说了,停止").split(",")
 )
+MIN_FINAL_CHARS = int(os.getenv("ASR_MIN_FINAL_CHARS", "3"))
 
 def _normalize_cn(s: str) -> str:
     try:
@@ -191,6 +192,12 @@ class ASRCallback:
         # ---------- ③ final：仅 final 驱动 LLM（若未在播报） ----------
         if is_end is True:
             final_text = text
+            if self._is_playing() and not self._has_hotword(final_text):
+                print(f"[ASR FINAL SKIP] AI speaking, drop='{final_text}'", flush=True)
+                return
+            if len(_normalize_cn(final_text).replace("。", "").replace("？", "").replace("?", "").replace("！", "").replace("!", "")) < MIN_FINAL_CHARS:
+                print(f"[ASR FINAL SKIP] too short, drop='{final_text}'", flush=True)
+                return
             try:
                 final_ts = time.perf_counter()
                 print(f"[PERF] asr_final_received_at={final_ts:.6f}", flush=True)
