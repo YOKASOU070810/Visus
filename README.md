@@ -170,11 +170,17 @@ cd app\android
 E:\newvisusmain\Visus\app\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
+仓库内也提供了一份可直接安装的 Debug APK：
+
+```text
+release/Visus-v1.0.0-debug.apk
+```
+
 ## 手机安装 APK
 
 ### 方法一：直接复制安装
 
-1. 把 `app-debug.apk` 复制到 Android 手机。
+1. 把 `release/Visus-v1.0.0-debug.apk` 复制到 Android 手机。
 2. 在手机文件管理器中点击 APK。
 3. 如果提示“禁止安装未知来源应用”，进入系统设置允许当前文件管理器安装未知应用。
 4. 安装完成后打开 Visus。
@@ -186,7 +192,7 @@ E:\newvisusmain\Visus\app\android\app\build\outputs\apk\debug\app-debug.apk
 3. 在项目根目录执行：
 
 ```powershell
-adb install -r app\android\app\build\outputs\apk\debug\app-debug.apk
+adb install -r release\Visus-v1.0.0-debug.apk
 ```
 
 如果提示设备未授权，请在手机上确认 USB 调试授权。
