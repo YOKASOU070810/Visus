@@ -25,14 +25,11 @@ BUILTIN_SYSTEM_PROMPT = load_builtin_system_prompt()
 VOICE_REPLY_RULES = (
     "\n\n补充语音播报规则："
     "除危险预警或复杂导航外，最多用 1 到 2 句回答，适合直接语音播报；"
-    "涉及画面、障碍物、道路、红绿灯、物品位置的问题，必须只根据当前帧或结构化检测结果回答；"
-    "凡是涉及前方路况、障碍物、能否通行、是否安全的问题，必须只根据当前视频帧或结构化检测结果回答；"
-    "没有当前视觉证据时，必须说“我暂时没有看到清晰画面，无法判断前方情况。”；"
+    "涉及画面、障碍物、道路、红绿灯、物品位置的问题，如果提供了当前帧，就优先根据当前帧回答；"
+    "如果没有当前帧，也要直接给出有帮助的简短回答；"
     "如果当前帧能判断，就直接回答物体、方位和大致距离，不要先要求用户调整摄像头；"
-    "只有画面过暗、严重模糊、主体被遮挡或问题目标完全不在画面中时，才提示调整摄像头；"
-    "不要连续重复“调整摄像头”类提示，同一轮回答只说一次结论；"
-    "禁止凭常识或想象说“前方安全”“可以走”“没有障碍物”；"
-    "安全预警由规则系统负责，不要自行编造危险。"
+    "不要主动提示调整摄像头，除非用户明确询问画面质量；"
+    "同一轮回答只说一次结论，不要输出过程状态。"
 )
 
 ark_client = None
@@ -99,8 +96,6 @@ async def stream_chat(
     Chat Completions 不通过该接口直接返回音频，因此这里仅产出文本。
     """
     system_prompt = BUILTIN_SYSTEM_PROMPT + VOICE_REPLY_RULES
-    has_image = any(isinstance(item, dict) and item.get("type") == "image_url" for item in content_list)
-
     if ark_client is None or not _HAS_ARK:
         yield OmniStreamPiece(text_delta="（AI 语音助手未配置，请设置 ARK_API_KEY）")
         return
@@ -121,9 +116,6 @@ async def stream_chat(
         completion = await asyncio.to_thread(ark_client.chat.completions.create, **request_kwargs)
     except Exception as e:
         print(f"[DOUBAO WARN] multimodal request failed, retrying text only: {repr(e)}", flush=True)
-        if has_image:
-            yield OmniStreamPiece(text_delta="我暂时没有看到清晰画面，无法判断前方情况。")
-            return
         completion = await asyncio.to_thread(
             ark_client.chat.completions.create,
             model=DOUBAO_MODEL,

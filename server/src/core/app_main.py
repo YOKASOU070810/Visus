@@ -195,7 +195,6 @@ SAFETY_VISUAL_TRIGGER_WORDS = (
     "有没有障碍物", "能不能过去", "帮我看看路况", "现在能走吗",
     "前方情况怎么样",
 )
-VISUAL_UNAVAILABLE_REPLY = "我暂时没有看到清晰画面，无法判断前方情况。"
 VISUAL_FRAME_MAX_AGE_SEC = float(os.getenv("VISUS_VISUAL_FRAME_MAX_AGE_SEC", "5.0"))
 SAFETY_SUMMARY_MAX_AGE_SEC = float(os.getenv("VISUS_SAFETY_SUMMARY_MAX_AGE_SEC", "1.0"))
 CAMERA_DISPLAY_ROTATE_DEG = int(os.getenv("CAMERA_DISPLAY_ROTATE_DEG", "90"))
@@ -705,38 +704,6 @@ def update_latest_safety_summary(obstacles, frame_width: int, frame_height: int,
     print(f"[SAFETY_MONITOR] latest_safety_summary={json.dumps(latest_safety_summary, ensure_ascii=False)}", flush=True)
 
 
-async def answer_safety_question_from_summary(user_text: str) -> Optional[str]:
-    if not is_safety_question(user_text):
-        return None
-
-    qa_start = time.perf_counter()
-    summary = latest_safety_summary
-    if not _summary_is_fresh(summary):
-        answer = VISUAL_UNAVAILABLE_REPLY
-        print("[SAFETY_QA] no fresh latest_safety_summary", flush=True)
-        print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
-        print("[PERF_AI] skipped_for_safety_question", flush=True)
-        return answer
-
-    print("[SAFETY_QA] using latest_safety_summary", flush=True)
-    if summary.get("has_obstacle"):
-        answer = str(summary.get("text") or "前方有障碍物，请注意避让")
-        alert = summary.get("alert")
-        if isinstance(alert, dict):
-            print("[SAFETY_QA] obstacle found, emitting alert from user question", flush=True)
-            alert = dict(alert)
-            alert["ts"] = time.time()
-            await ui_broadcast_multimodal_alert(alert)
-        print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
-        print("[PERF_AI] skipped_for_safety_question", flush=True)
-        return answer
-
-    answer = "当前没有检测到明显障碍，但请慢慢前进，我会继续观察。"
-    print(f"[SAFETY_QA] bypass_llm=true latency_ms={(time.perf_counter() - qa_start) * 1000:.1f}", flush=True)
-    print("[PERF_AI] skipped_for_safety_question", flush=True)
-    return answer
-
-
 def get_latest_camera_jpeg(max_age_sec: float = VISUAL_FRAME_MAX_AGE_SEC) -> Optional[bytes]:
     if not last_frames:
         return None
@@ -745,18 +712,6 @@ def get_latest_camera_jpeg(max_age_sec: float = VISUAL_FRAME_MAX_AGE_SEC) -> Opt
         return None
     return jpeg_bytes
 
-
-async def emit_ai_reply_without_llm(text: str):
-    await soft_reset_audio("visual_guard_fallback")
-    try:
-        play_voice_text(text)
-    except Exception as e:
-        print(f"[AI GUARD] fallback voice failed: {repr(e)}", flush=True)
-    try:
-        await ui_broadcast_ai_reply(text, tts_fallback=False)
-        await ui_broadcast_status("idle")
-    except Exception as e:
-        print(f"[AI GUARD] fallback UI failed: {repr(e)}", flush=True)
 
 def _rotate_bgr_for_display(bgr):
     if bgr is None:
@@ -996,11 +951,6 @@ async def start_ai_with_text_custom(user_text: str):
             await ui_broadcast_final("[系统] 导航统领器未初始化")
         return    
 
-    safety_answer = await answer_safety_question_from_summary(user_text)
-    if safety_answer:
-        await emit_ai_reply_without_llm(safety_answer)
-        return
-
     # 检查是否是"帮我找/识别一下xxx"的命令
     # 扩展正则表达式，支持更多关键词
     find_pattern = r"(?:^\s*帮我)?\s*找一下\s*(.+?)(?:。|！|？|$)"
@@ -1086,9 +1036,7 @@ async def start_ai_with_text(user_text: str):
     if attach_image_request:
         visual_jpeg = get_latest_camera_jpeg()
         if visual_jpeg is None:
-            print("[AI GUARD] visual request without fresh camera frame; refusing to guess", flush=True)
-            await emit_ai_reply_without_llm(VISUAL_UNAVAILABLE_REPLY)
-            return
+            print("[AI] visual request without fresh camera frame; continuing text-only", flush=True)
 
     def _to_stream_pcm(audio_bytes: bytes, rate_state):
         if not audio_bytes:
@@ -1189,13 +1137,7 @@ async def start_ai_with_text(user_text: str):
                 print(f"[AI] attach_image=true jpeg={len(visual_jpeg)} compressed={len(small_jpeg)}", flush=True)
             except Exception as e:
                 print(f"[AI GUARD] image attach failed: {repr(e)}", flush=True)
-                try:
-                    await pcm_queue.put(None)
-                    await playback_task
-                except Exception:
-                    pass
-                await emit_ai_reply_without_llm(VISUAL_UNAVAILABLE_REPLY)
-                return
+                attach_image = False
         else:
             print("[AI] attach_image=false", flush=True)
         content_list.append({"type": "text", "text": user_text})
@@ -1207,15 +1149,15 @@ async def start_ai_with_text(user_text: str):
                 try:
                     piece = await asyncio.wait_for(
                         stream_iter.__anext__(),
-                        timeout=3.0 if not first_text_logged else 20.0,
+                        timeout=20.0 if not first_text_logged else 30.0,
                     )
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
                     if not first_text_logged:
-                        print("[PERF_AI] first_token_timeout fallback", flush=True)
+                        print("[PERF_AI] first_token_timeout", flush=True)
                         txt_buf.clear()
-                        txt_buf.append("我正在处理，请稍等。")
+                        txt_buf.append("抱歉，AI模型这次响应超时，请再问一次。")
                         break
                     raise
                 # 文本增量（仅 UI）
@@ -1282,7 +1224,8 @@ async def start_ai_with_text(user_text: str):
             except Exception:
                 pass
 
-            final_text = ("".join(txt_buf)).strip() or fallback_reply
+            final_text = ("".join(txt_buf)).strip()
+            final_text = final_text or fallback_reply
             ai_speaking_until = 0.0
             if final_text and not audio_sent:
                 try:
