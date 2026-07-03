@@ -613,7 +613,18 @@ class NavigationMaster:
             #     ratio = 1.0 - min(1.0, remain / self.COOLDOWN_SEC)
             #     _draw_progress_bar(ann, ratio, pos=(10, 140), size=(160, 8), color="gray")
 
-            return OrchestratorResult(ann, self._say(now, say), self.state, {"source": "blind", "cross_stage": cross_stage, "blind_state": blind_state})
+            return OrchestratorResult(
+                ann,
+                self._say(now, say),
+                self.state,
+                {
+                    "source": "blind",
+                    "cross_stage": cross_stage,
+                    "blind_state": blind_state,
+                    "blind_state_info": state_info,
+                    "latest_alert": state_info.get("latest_alert") or state_info.get("multimodal_alert"),
+                }
+            )
 
         if self.state == WAIT_TRAFFIC_LIGHT:
             ann = bgr.copy()

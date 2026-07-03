@@ -16,6 +16,7 @@ import torch  # 添加这行
 from vision.obstacle_detector_client import ObstacleDetectorClient
 from voice.audio_player import play_voice_text  # 新增
 from navigation.crosswalk_awareness import CrosswalkAwarenessMonitor, split_combined_voice  # 斑马线感知
+from navigation.multimodal_alert import build_obstacle_alert, should_emit_alert
 # 尝试导入 Pillow，用于中文显示
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -199,6 +200,8 @@ class BlindPathNavigator:
         
         # 障碍物语音待播报
         self.pending_obstacle_voice = None
+        self.pending_multimodal_alert = None
+        self.multimodal_alert_state = {}
         
         # 红绿灯检测
         self.traffic_light_detector = None
@@ -473,7 +476,7 @@ class BlindPathNavigator:
             self._add_obstacle_visualization(obs, frame_visualizations)
         
         # 【新增】检查近距离障碍物并设置语音
-        self._check_and_set_obstacle_voice(detected_obstacles)
+        self._check_and_set_obstacle_voice(detected_obstacles, image_width, image_height)
         
         # 【新增】斑马线感知处理
         # 先检查crosswalk_mask状态
@@ -769,6 +772,9 @@ class BlindPathNavigator:
         annotated_image = self._draw_command_button(annotated_image, current_instruction)
         
         # 8. 返回结果
+        latest_alert = self.pending_multimodal_alert
+        self.pending_multimodal_alert = None
+
         return ProcessingResult(
             guidance_text=guidance_text,
             visualizations=frame_visualizations,
@@ -776,7 +782,9 @@ class BlindPathNavigator:
             state_info={
                 "state": self.current_state,
                 "crosswalk_stage": current_stage,
-                "frame_count": self.frame_counter
+                "frame_count": self.frame_counter,
+                "latest_alert": latest_alert,
+                "multimodal_alert": latest_alert
             }
         )
     
@@ -1932,6 +1940,25 @@ class BlindPathNavigator:
         logger.info(f"[_detect_obstacles] 开始执行，Frame={self.frame_counter}, obstacle_detector={'已加载' if self.obstacle_detector else '未加载'}")
         
         if self.obstacle_detector is None:
+            if os.getenv("VISUS_MOCK_OBSTACLE_ALERT", "0") == "1":
+                h, w = image.shape[:2]
+                level = os.getenv("VISUS_MOCK_OBSTACLE_LEVEL", "high").strip().lower()
+                mock_by_level = {
+                    "low": (0.58, 0.04),
+                    "medium": (0.72, 0.07),
+                    "high": (0.83, 0.11),
+                    "critical": (0.91, 0.18),
+                }
+                bottom_y_ratio, area_ratio = mock_by_level.get(level, mock_by_level["high"])
+                logger.warning("[MULTIMODAL_ALERT] 使用模拟障碍物测试预警: level=%s", level)
+                return [{
+                    "name": os.getenv("VISUS_MOCK_OBSTACLE_NAME", "car"),
+                    "area_ratio": area_ratio,
+                    "center_x": w * 0.5,
+                    "center_y": h * 0.7,
+                    "bottom_y_ratio": bottom_y_ratio,
+                    "confidence": 1.0,
+                }]
             logger.warning("[_detect_obstacles] 障碍物检测器未加载！")
             return []
         
@@ -2011,47 +2038,54 @@ class BlindPathNavigator:
             traceback.print_exc()
             return []
     
-    def _check_and_set_obstacle_voice(self, obstacles):
+    def _check_and_set_obstacle_voice(self, obstacles, frame_width=None, frame_height=None):
         """检查障碍物并设置待播报的语音"""
         if not obstacles:
             self.last_obstacle_speech = ""
             self.pending_obstacle_voice = None
+            self.pending_multimodal_alert = None
             return
-        
-        # 筛选近距离障碍物（提高阈值，只有非常近才报警）
-        NEAR_DISTANCE_Y_THRESHOLD = 0.75  # 提高到0.75，障碍物底部必须在画面下方75%以下
-        NEAR_DISTANCE_AREA_THRESHOLD = 0.12  # 提高到0.12，障碍物必须占画面12%以上
-        
-        near_obstacles = []
+
+        frame_width = int(frame_width or 0)
+        frame_height = int(frame_height or 0)
+        alert_candidates = []
         for obs in obstacles:
-            if (obs.get('bottom_y_ratio', 0) > NEAR_DISTANCE_Y_THRESHOLD or
-                obs.get('area_ratio', 0) > NEAR_DISTANCE_AREA_THRESHOLD):
-                near_obstacles.append(obs)
-        
-        if near_obstacles:
-            # 获取最主要的障碍物（面积最大）
-            main_obstacle = max(near_obstacles, key=lambda x: x.get('area_ratio', 0))
-            obstacle_name = main_obstacle.get('name', '')
-            current_time = time.time()
-            
-            # 检查是否需要播报
-            should_announce = False
-            if obstacle_name != self.last_obstacle_speech:
-                # 不同障碍物，立即播报
-                should_announce = True
-                self.last_obstacle_speech = obstacle_name
-                self.last_obstacle_speech_time = current_time
-            elif current_time - self.last_obstacle_speech_time > self.obstacle_speech_cooldown:
-                # 同一障碍物但超过冷却时间，再次播报
-                should_announce = True
-                self.last_obstacle_speech_time = current_time
-            
-            if should_announce:
-                self.pending_obstacle_voice = self._speech_for_obstacle(obstacle_name)
+            alert = build_obstacle_alert(obs, frame_width, frame_height)
+            if alert:
+                alert_candidates.append(alert)
+
+        if alert_candidates:
+            level_rank = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+            main_alert = max(
+                alert_candidates,
+                key=lambda x: (
+                    level_rank.get(x.get("level", "low"), 0),
+                    float(x.get("bottom_y_ratio", 0.0)),
+                    float(x.get("area_ratio", 0.0)),
+                )
+            )
+
+            if should_emit_alert(main_alert, self.multimodal_alert_state):
+                self.pending_multimodal_alert = main_alert
+                self.pending_obstacle_voice = main_alert.get("text") or self._speech_for_obstacle(main_alert.get("obstacle", ""))
+                self.last_obstacle_speech = f"{main_alert.get('obstacle', '')}:{main_alert.get('direction', '')}:{main_alert.get('level', '')}"
+                self.last_obstacle_speech_time = time.time()
+                logger.info(
+                    "[MULTIMODAL_ALERT] level=%s text=%s obstacle=%s direction=%s bottom=%.2f area=%.3f",
+                    main_alert.get("level"),
+                    main_alert.get("text"),
+                    main_alert.get("obstacle"),
+                    main_alert.get("direction"),
+                    float(main_alert.get("bottom_y_ratio", 0.0)),
+                    float(main_alert.get("area_ratio", 0.0)),
+                )
+            else:
+                self.pending_multimodal_alert = None
+                self.pending_obstacle_voice = None
         else:
-            # 没有近距离障碍物
             self.last_obstacle_speech = ""
             self.pending_obstacle_voice = None
+            self.pending_multimodal_alert = None
 
     def _check_obstacles(self, image, mask, frame_visualizations):
         """检查并处理障碍物"""
@@ -3138,6 +3172,8 @@ class BlindPathNavigator:
         
         # 重置语音相关
         self.pending_obstacle_voice = None
+        self.pending_multimodal_alert = None
+        self.multimodal_alert_state = {}
         self.last_obstacle_speech = ""
         self.last_obstacle_speech_time = 0
         
