@@ -754,7 +754,6 @@ async def emit_ai_reply_without_llm(text: str):
         print(f"[AI GUARD] fallback voice failed: {repr(e)}", flush=True)
     try:
         await ui_broadcast_ai_reply(text, tts_fallback=False)
-        await ui_broadcast_final("[AI] " + text)
         await ui_broadcast_status("idle")
     except Exception as e:
         print(f"[AI GUARD] fallback UI failed: {repr(e)}", flush=True)
