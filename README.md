@@ -75,11 +75,15 @@ Visus/
 
 ## 后端配置
 
-1. 进入项目根目录：
+1. 解压源码压缩包后，进入项目根目录。
+
+如果你把项目解压到了 `D:\Projects\Visus`，就执行：
 
 ```powershell
-cd E:\newvisusmain\Visus
+cd D:\Projects\Visus
 ```
+
+后续命令都以“项目根目录”为当前目录执行；实际路径以你自己的解压位置为准。
 
 2. 如果还没有 `server\.env`，复制模板：
 
@@ -167,7 +171,7 @@ cd app\android
 构建成功后 APK 位于：
 
 ```text
-E:\newvisusmain\Visus\app\android\app\build\outputs\apk\debug\app-debug.apk
+app/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 仓库内也提供了一份可直接安装的 Debug APK：
