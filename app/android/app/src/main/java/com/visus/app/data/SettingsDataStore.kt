@@ -21,7 +21,7 @@ class SettingsDataStore(private val context: Context) {
         val DEFAULT_IP = "10.0.2.2"
         val DEFAULT_PORT = "8081"
         val DEFAULT_AMAP_KEY = ""
-        val DEFAULT_ARK_KEY = "ark-1b4752cf-a621-4c2b-b4b1-7de39d2108ec-aa48e"
+        val DEFAULT_ARK_KEY = ""
     }
 
     val serverIp: Flow<String> = context.dataStore.data.map { preferences ->

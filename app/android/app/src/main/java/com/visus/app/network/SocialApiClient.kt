@@ -21,7 +21,7 @@ object SocialApiClient {
     private var baseUrl: String = "http://10.0.2.2:8081"
     private var authToken: String? = null
     var amapKey: String = ""
-    var arkKey: String = "ark-1b4752cf-a621-4c2b-b4b1-7de39d2108ec-aa48e"
+    var arkKey: String = ""
 
     fun setServer(url: String) { baseUrl = url.trimEnd('/') }
     fun getServer(): String = baseUrl
