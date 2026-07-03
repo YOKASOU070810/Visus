@@ -25,6 +25,7 @@ node_modules/
 
 # Logs
 *.log
+dist/
 
 # Database
 *.db

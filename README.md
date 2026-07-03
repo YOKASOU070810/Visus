@@ -176,6 +176,37 @@ E:\newvisusmain\Visus\app\android\app\build\outputs\apk\debug\app-debug.apk
 release/Visus-v1.0.0-debug.apk
 ```
 
+## 比赛提交材料
+
+建议提交以下材料：
+
+```text
+README.md                              # 项目说明和运行指南
+docs/competition-plan.md               # 作品策划文档
+release/Visus-v1.0.0-debug.apk         # Android 可运行版本
+dist/Visus-submission-source.zip       # 干净源码压缩包，由脚本生成
+```
+
+不要直接右键压缩整个项目目录，因为本地目录中可能包含：
+
+- `server/.env`：本地真实 API Key
+- `server/.venv`：Python 虚拟环境，体积很大
+- `.git`：Git 历史记录
+- `app/android/app/build`：Gradle 构建缓存
+- `server/visus_social.db`：本地测试数据库
+
+推荐用脚本生成源码压缩包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package_submission.ps1
+```
+
+生成文件：
+
+```text
+dist/Visus-submission-source.zip
+```
+
 ## 手机安装 APK
 
 ### 方法一：直接复制安装
