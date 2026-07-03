@@ -64,6 +64,21 @@ async def send_private_message(body: SendMessageRequest, request: Request):
         db.close()
 
 
+@router.get("/messages/unread")
+async def get_unread_count(request: Request):
+    """Get count of unread private messages."""
+    user = get_current_user(request)
+    db = SessionLocal()
+    try:
+        count = db.query(FriendMessage).filter(
+            FriendMessage.receiver_id == user.id,
+            FriendMessage.is_read == False,
+        ).count()
+        return {"success": True, "data": {"unread": count}}
+    finally:
+        db.close()
+
+
 @router.get("/messages/{friend_id}")
 async def get_private_messages(friend_id: int, request: Request, limit: int = 50):
     """Get conversation history with a specific friend."""
@@ -84,21 +99,6 @@ async def get_private_messages(friend_id: int, request: Request, limit: int = 50
         db.commit()
 
         return {"success": True, "data": {"messages": [m.to_dict() for m in reversed(msgs)]}}
-    finally:
-        db.close()
-
-
-@router.get("/messages/unread")
-async def get_unread_count(request: Request):
-    """Get count of unread private messages."""
-    user = get_current_user(request)
-    db = SessionLocal()
-    try:
-        count = db.query(FriendMessage).filter(
-            FriendMessage.receiver_id == user.id,
-            FriendMessage.is_read == False,
-        ).count()
-        return {"success": True, "data": {"unread": count}}
     finally:
         db.close()
 

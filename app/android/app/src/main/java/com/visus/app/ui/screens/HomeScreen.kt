@@ -179,45 +179,23 @@ fun HomeScreen(
                             }
                         }
                     }
-                    HomeTab.AGENT -> AgentScreenOverlay()
+                    HomeTab.AGENT -> VoiceAgentScreen()
                     HomeTab.ALERTS -> AlertsScreen()
                     HomeTab.PROFILE -> ProfileScreen(onLogout = onLogout)
                 }
             }
         }
 
-        // AI FAB - visible on all tabs for blind users
+        // AI FAB - visible on all tabs for blind users (switches to AGENT tab)
         if (userType == "blind" && selectedTab != HomeTab.AGENT) {
             FloatingActionButton(
-                onClick = { showAgentOverlay = true },
+                onClick = { selectedTab = HomeTab.AGENT },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 80.dp)
                     .size(56.dp).shadow(8.dp, CircleShape),
-                containerColor = Brush.linearGradient(listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))).let { Color(0xFF6366F1) },
+                containerColor = Color(0xFF6366F1),
                 shape = CircleShape
             ) {
                 Text("🤖", fontSize = 24.sp)
-            }
-        }
-
-        // Agent overlay (bottom sheet)
-        if (showAgentOverlay) {
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))
-                    .clickable(enabled = false) { }
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().fillMaxHeight(0.7f).align(Alignment.BottomCenter),
-                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("🤖 Visus AI", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { showAgentOverlay = false }) { Icon(Icons.Default.Close, "关闭") }
-                        }
-                        Divider()
-                        Box(modifier = Modifier.weight(1f)) { AgentChatContent() }
-                    }
-                }
             }
         }
     }

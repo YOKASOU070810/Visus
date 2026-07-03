@@ -93,42 +93,50 @@ class EmergencyNotificationService : Service() {
     }
 
     private fun connectWebSocket(serverUrl: String, token: String) {
+        if (serverUrl.isBlank()) return
         val wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://")
         val fullUrl = "$wsUrl/ws/social?token=$token"
 
-        wsClient?.close()
-        wsClient = object : WebSocketClient(URI(fullUrl)) {
-            override fun onOpen(handshakedata: ServerHandshake?) {
-                println("[EmergencyNotif] Connected to WebSocket")
-            }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    wsClient?.close()
+                    wsClient = object : WebSocketClient(URI(fullUrl)) {
+                        override fun onOpen(handshakedata: ServerHandshake?) {
+                            println("[EmergencyNotif] Connected to WebSocket")
+                        }
 
-            override fun onMessage(message: String?) {
-                message ?: return
-                try {
-                    val obj = JSONObject(message)
-                    val type = obj.optString("type", "")
-                    if (type == "emergency_alert") {
-                        handleEmergencyAlert(obj)
+                        override fun onMessage(message: String?) {
+                            message ?: return
+                            try {
+                                val obj = JSONObject(message)
+                                val type = obj.optString("type", "")
+                                if (type == "emergency_alert") {
+                                    handleEmergencyAlert(obj)
+                                }
+                            } catch (_: Exception) {}
+                        }
+
+                        override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                            scope.launch {
+                                delay(5000)
+                                connectWebSocket(serverUrl, token)
+                            }
+                        }
+
+                        override fun onError(ex: Exception?) {
+                            scope.launch {
+                                delay(5000)
+                                connectWebSocket(serverUrl, token)
+                            }
+                        }
                     }
-                } catch (_: Exception) {}
-            }
-
-            override fun onClose(code: Int, reason: String?, remote: Boolean) {
-                // Reconnect after delay
-                scope.launch {
-                    delay(5000)
-                    connectWebSocket(serverUrl, token)
+                    wsClient?.connect()
                 }
-            }
-
-            override fun onError(ex: Exception?) {
-                scope.launch {
-                    delay(5000)
-                    connectWebSocket(serverUrl, token)
-                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to connect WebSocket for SOS: ${e.message}")
             }
         }
-        wsClient?.connect()
     }
 
     private fun handleEmergencyAlert(obj: JSONObject) {

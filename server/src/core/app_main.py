@@ -84,13 +84,15 @@ except Exception:
 from dashscope import audio as dash_audio  # 若未安装，会在原项目里抛错提示
 
 ASR_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-if not ASR_API_KEY:
-    raise RuntimeError("未设置 DASHSCOPE_API_KEY")
-print(
-    f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
-    f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
-    flush=True
-)
+_HAS_ASR = bool(ASR_API_KEY)
+if not _HAS_ASR:
+    print("[ASR] DASHSCOPE_API_KEY not set — voice recognition disabled", flush=True)
+else:
+    print(
+        f"[ASR] DASHSCOPE_API_KEY loaded={bool(ASR_API_KEY)}, "
+        f"prefix={ASR_API_KEY[:3]}..., suffix={ASR_API_KEY[-4:] if len(ASR_API_KEY) >= 4 else '****'}",
+        flush=True
+    )
 
 MODEL        = "paraformer-realtime-v2"
 SAMPLE_RATE  = 16000
@@ -130,12 +132,20 @@ import atexit
 # ---- 社交模块（好友预警 / 紧急通知） ----
 from social.database import init_db
 from social.api_routes import router as social_router
+from social.groups import router as groups_router
+from social.maps import router as maps_router
+from social.ai_agent import router as agent_router
+from social.messaging import router as messaging_router
 from social.status_ws import handle_status_websocket
 
 app = FastAPI()
 
 # 注册社交 API 路由 (/api/login, /api/friends, /api/status, etc.)
 app.include_router(social_router)
+app.include_router(groups_router)
+app.include_router(maps_router)
+app.include_router(agent_router)
+app.include_router(messaging_router)
 
 ASR_PROVIDER = get_asr_provider()
 AI_MIC_SUPPRESS_TAIL_SEC = float(os.getenv("AI_MIC_SUPPRESS_TAIL_SEC", "0.8"))

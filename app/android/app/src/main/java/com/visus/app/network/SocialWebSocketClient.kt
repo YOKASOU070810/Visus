@@ -48,19 +48,21 @@ class SocialWebSocketClient {
     fun connect(serverIp: String, serverPort: String, jwtToken: String) {
         serverUrl = "ws://$serverIp:$serverPort/ws/social?token=$jwtToken"
         token = jwtToken
-        doConnect()
+        scope.launch { doConnect() }
     }
 
     fun disconnect() {
         reconnectJob?.cancel()
         keepaliveJob?.cancel()
-        wsClient?.close()
-        wsClient = null
-        _isConnected.value = false
+        scope.launch {
+            wsClient?.close()
+            wsClient = null
+            _isConnected.value = false
+        }
     }
 
-    private fun doConnect() {
-        if (serverUrl.isBlank()) return
+    private suspend fun doConnect() = withContext(Dispatchers.IO) {
+        if (serverUrl.isBlank()) return@withContext
 
         wsClient?.close()
         wsClient = object : WebSocketClient(URI(serverUrl)) {

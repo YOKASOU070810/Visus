@@ -10,13 +10,16 @@ from utils.system_prompt import load_builtin_system_prompt
 # Volcengine Ark uses an OpenAI-compatible Chat Completions endpoint.
 ARK_API_KEY = os.getenv("ARK_API_KEY", "")
 ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-if not ARK_API_KEY:
-    raise RuntimeError("未设置 ARK_API_KEY")
+_HAS_ARK = bool(ARK_API_KEY)
 
 # In Ark, model should usually be your endpoint ID, for example "ep-xxxxxxxx".
 DOUBAO_MODEL = os.getenv("DOUBAO_MODEL", os.getenv("ARK_MODEL", ""))
-if not DOUBAO_MODEL:
-    raise RuntimeError("未设置 DOUBAO_MODEL 或 ARK_MODEL")
+_HAS_ARK_MODEL = bool(DOUBAO_MODEL)
+
+if not _HAS_ARK:
+    print("[WARN] ARK_API_KEY not set — LLM chat streaming disabled", flush=True)
+elif not _HAS_ARK_MODEL:
+    print("[WARN] DOUBAO_MODEL/ARK_MODEL not set — LLM chat streaming disabled", flush=True)
 
 BUILTIN_SYSTEM_PROMPT = load_builtin_system_prompt()
 VOICE_REPLY_RULES = (
@@ -32,10 +35,12 @@ VOICE_REPLY_RULES = (
     "安全预警由规则系统负责，不要自行编造危险。"
 )
 
-ark_client = OpenAI(
-    api_key=ARK_API_KEY,
-    base_url=ARK_BASE_URL,
-)
+ark_client = None
+if _HAS_ARK:
+    ark_client = OpenAI(
+        api_key=ARK_API_KEY,
+        base_url=ARK_BASE_URL,
+    )
 
 
 _SENTINEL = object()
@@ -95,6 +100,11 @@ async def stream_chat(
     """
     system_prompt = BUILTIN_SYSTEM_PROMPT + VOICE_REPLY_RULES
     has_image = any(isinstance(item, dict) and item.get("type") == "image_url" for item in content_list)
+
+    if ark_client is None or not _HAS_ARK:
+        yield OmniStreamPiece(text_delta="（AI 语音助手未配置，请设置 ARK_API_KEY）")
+        return
+
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": content_list},
